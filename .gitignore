@@ -1,0 +1,14 @@
+# Generated and machine-specific output - never commit these.
+work/
+build/
+context/
+__pycache__/
+*.pyc
+
+# Game / mod payloads
+*.pak
+*.rdb
+
+# Editors
+.vscode/
+.idea/
