@@ -167,3 +167,4 @@ else {
 }
 
 Set-Content -Path $conf -Value $text -NoNewline
+Write-Host 'Note: the Reforger launcher only lists Workshop items and can drop an unpublished local entry on the next start. For local builds prefer tools\launch-with-preset.ps1.' -ForegroundColor Yellow
