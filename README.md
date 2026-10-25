@@ -109,20 +109,40 @@ files are present.
 
 ## Publishing
 
-Publishing authenticates through the Workbench GUI only. Current Workbench builds
-have **no command-line login** (there is no `-wbBackendLogin` switch; the backend
-reports `Game Identity is not linked with Bohemia Account` until you sign in), so
-no script should ask for or store your password.
+Workbench authenticates against the Bohemia backend with a session bound to your
+linked Game Identity. There is **no command-line login** in current builds
+(`-wbBackendLogin` is gone; the failure strings are `Backend is not enabled`,
+`authentication timeout`, `Game Identity is not linked with Bohemia Account`), so
+one human sign-in is unavoidable. After it, uploads are headless.
 
-- **First publish** (`tools/publish-addon.ps1 -Project <dir>`): opens Workbench on
-  the project. In Resource Manager use Publish, sign in with your Bohemia
-  Interactive account, link the game identity, fill title/description/tags and
-  pick a preview image.
-- **Updates** (`tools/publish-addon.ps1 -Update -PublishDir <dir> -Version 1.0.1 -ChangeNote "..."`):
-  runs `-publishAddon` headlessly against the cached session. No credentials are
-  passed; Workbench keeps the session.
-- Never commit credentials, tokens or session files. The scripts only read the
-  Workbench log to report backend errors.
+Two-phase, one script:
+
+```powershell
+# once - opens Workbench for the sign-in + first publish
+.\tools\publish-addon.ps1 -Project <dir>
+
+# forever after - no GUI
+.\tools\publish-addon.ps1 -Auto -PublishDir <packed dir> -Version 1.0.1 -ChangeNote "fix"
+```
+
+`-Auto` uploads, then reads the Workbench log to classify the outcome:
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | no backend errors reported |
+| 1 | backend/Workshop API reported an error |
+| 2 | account not linked yet - a human sign-in is required once |
+| 3 | cached session rejected - sign in again |
+| 4 | backend not ready (Steam offline / still booting) |
+
+The script kills Workbench if it hangs (it does hang at startup while the game
+owns the Steam identity) and never asks for or stores a password. Do not commit
+credentials, tokens or session files.
+
+Note on "fully headless": the binary does contain a Workshop v4 upload API with
+Bearer auth, so a script could reimplement the whole login+upload pipeline. That
+means handling your account password in code and breaking whenever BI changes the
+API - not worth it, and not what this tool does.
 
 ## Limits
 
