@@ -90,6 +90,16 @@ appends your entry at the **end** of the preset and refuses to run while the gam
 is open (the launcher would overwrite the config on exit). It backs up the config
 first.
 
+An unpublished addon is not a Workshop item, so the launcher may report it as
+*cannot be downloaded* inside a preset. Two things help: `deploy-mod.ps1` writes a
+`meta` file (local-addon marker), and a test build should live in its own preset
+(`-Preset "AI Test" -CopyFrom "Preset 1"`) rather than in a preset you share.
+For a guaranteed test path, bypass presets:
+
+```powershell
+ArmaReforgerSteam.exe -addonsDir "<addons>" -addons "<Name>_<GUID>"
+```
+
 ## Patch a script in an existing mod
 
 ```powershell

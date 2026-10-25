@@ -76,6 +76,25 @@ powershell -File tools\deploy-mod.ps1 -Build build\mod -Id MyMod -Guid <16 hex c
   `-wbModule=ResourceManager` is mandatory; without it Workbench starts, exits
   `0`, and builds nothing.
 
+## Local addons vs Workshop
+
+The launcher resolves preset entries as Workshop items. A locally built addon is
+not one, so a preset can report it as *cannot be downloaded* even though the
+files are present.
+
+- `deploy-mod.ps1` writes a `meta` file next to `addon.gproj`, which is what makes
+  the launcher treat the folder as a local addon. Keep it if you copy a build by
+  hand.
+- Even with `meta`, an unpublished addon has no Workshop identity. Keep test
+  builds in their own preset instead of mixing them into a shared one.
+- The reliable way to test without publishing is to skip presets entirely:
+
+  ```powershell
+  ArmaReforgerSteam.exe -addonsDir "<addons folder>" -addons "<FolderName>"
+  ```
+
+  `-addons` accepts the folder name (the `<Name>_<GUID>` directory) or the GUID.
+
 ## Limits
 
 - Workbench is a GUI application. Its CLI covers project open, script
