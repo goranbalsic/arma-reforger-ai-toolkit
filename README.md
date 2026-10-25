@@ -107,6 +107,23 @@ files are present.
   `-DryRun` prints the resolved list and flags any GUID with no folder on disk,
   which is what the launcher would otherwise fail on.
 
+## Publishing
+
+Publishing authenticates through the Workbench GUI only. Current Workbench builds
+have **no command-line login** (there is no `-wbBackendLogin` switch; the backend
+reports `Game Identity is not linked with Bohemia Account` until you sign in), so
+no script should ask for or store your password.
+
+- **First publish** (`tools/publish-addon.ps1 -Project <dir>`): opens Workbench on
+  the project. In Resource Manager use Publish, sign in with your Bohemia
+  Interactive account, link the game identity, fill title/description/tags and
+  pick a preview image.
+- **Updates** (`tools/publish-addon.ps1 -Update -PublishDir <dir> -Version 1.0.1 -ChangeNote "..."`):
+  runs `-publishAddon` headlessly against the cached session. No credentials are
+  passed; Workbench keeps the session.
+- Never commit credentials, tokens or session files. The scripts only read the
+  Workbench log to report backend errors.
+
 ## Limits
 
 - Workbench is a GUI application. Its CLI covers project open, script
