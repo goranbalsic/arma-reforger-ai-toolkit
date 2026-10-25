@@ -149,6 +149,10 @@ game owns the Steam identity or while a dependency is missing.
 
 The script never asks for, stores or transmits a password.
 
+Workbench needs roughly 3 GB of free RAM to publish. If the machine is busy
+(a game, several browsers) it dies with `Out of memory` mid-publish; the script
+refuses to start below 3 GB instead.
+
 Note on "fully headless": the binary does contain the Workshop v4 upload API with
 Bearer auth, so a script could reimplement login and upload. That means handling
 your account password in code and breaking whenever BI changes the API - not what

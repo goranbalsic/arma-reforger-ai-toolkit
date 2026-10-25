@@ -29,6 +29,11 @@ $arma = Find-Arma
 if (-not $arma.Workbench) { throw 'Workbench not found (Arma Reforger Tools)' }
 if (-not $arma.GameAddons) { throw 'Game addons folder not found' }
 
+$freeGb = (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB
+if ($freeGb -lt 3) {
+    throw ('Only {0:N1} GB RAM free. Workbench needs about 3 GB to publish - close games and browsers first.' -f $freeGb)
+}
+
 $logsRoot = Join-Path $env:USERPROFILE 'Documents\My Games\ArmaReforgerWorkbench\logs'
 $regRoot = 'HKCU:\Software\Bohemia Interactive\Arma Reforger Workbench\Workbench\publish'
 
