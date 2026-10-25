@@ -129,24 +129,29 @@ if (-not $block) {
     if (-not $CopyFrom) { throw "Preset '$Preset' not found. Pass -CopyFrom <existing preset> to create it." }
     $src = Get-PresetBlock $text $CopyFrom
     if (-not $src) { throw "Source preset '$CopyFrom' not found" }
-    # clone the whole source preset, then rename it and add this addon
-    $body = $text.Substring($src.Start, $src.Close - $src.Start + 1)
-    $newGuid = Get-Hash16 "preset:$Preset"
-    $body = $body -replace '^SCR_WorkshopAddonPreset "\{[0-9A-F]+\}"', "SCR_WorkshopAddonPreset `"{$newGuid}`""
-    $body = [regex]::Replace($body, 'm_sName "[^"]*"', "m_sName `"$Preset`"", 1)
-    # append our entry at the end of the cloned addon list
-    $metaOpen = $body.IndexOf('m_aAddonsMeta {')
-    if ($metaOpen -lt 0) { throw 'Cloned preset has no addon list' }
-    $ob = $body.IndexOf('{', $metaOpen)
+    # take the source addon entries verbatim - never rewrite their names
+    $metaAt = $text.IndexOf('m_aAddonsMeta {', $src.Open)
+    if ($metaAt -lt 0) { throw "Source preset '$CopyFrom' has no addon list" }
+    $ob = $text.IndexOf('{', $metaAt)
     $d = 0; $cb = -1
-    for ($i = $ob; $i -lt $body.Length; $i++) {
-        if ($body[$i] -eq '{') { $d++ } elseif ($body[$i] -eq '}') { $d--; if ($d -eq 0) { $cb = $i; break } }
+    for ($i = $ob; $i -lt $text.Length; $i++) {
+        if ($text[$i] -eq '{') { $d++ } elseif ($text[$i] -eq '}') { $d--; if ($d -eq 0) { $cb = $i; break } }
     }
-    $entry = "     SCR_WorkshopAddonPresetAddonMeta `"{$metaGuid}`" {`r`n      m_sGuid `"$Guid`"`r`n      m_sName `"$Title`"`r`n     }`r`n"
-    $lineStart = $body.LastIndexOf("`n", $cb) + 1
-    $body = $body.Insert($lineStart, $entry)
+    if ($cb -lt 0) { throw 'Unbalanced source addon list' }
+    $inner = $text.Substring($ob + 1, $cb - $ob - 1).TrimEnd()
+
+    $newGuid = Get-Hash16 "preset:$Preset"
+    $myEntry = "     SCR_WorkshopAddonPresetAddonMeta `"{$metaGuid}`" {`r`n      m_sGuid `"$Guid`"`r`n      m_sName `"$Title`"`r`n     }"
+    $body = "SCR_WorkshopAddonPreset `"{$newGuid}`" {`r`n" +
+            "    m_sName `"$Preset`"`r`n" +
+            "    m_aAddonsMeta {`r`n" +
+            "$inner`r`n" +
+            "$myEntry`r`n" +
+            "    }`r`n" +
+            "   }"
     $text = $text.TrimEnd() + "`r`n   " + $body + "`r`n"
-    Write-Host "Created preset '$Preset' from '$CopyFrom' with $(([regex]::Matches($body, 'm_sGuid')).Count) addons" -ForegroundColor Green
+    $copied = ([regex]::Matches($inner, 'm_sGuid')).Count
+    Write-Host "Created preset '$Preset' from '$CopyFrom' with $($copied + 1) addons" -ForegroundColor Green
 }
 else {
     $metaOpen = $text.IndexOf('m_aAddonsMeta {', $block.Open)
