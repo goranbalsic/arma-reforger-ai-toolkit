@@ -81,8 +81,14 @@ if (-not $Auto) {
     }
     Write-Host "Pre-filled publish dialog for '$modId'" -ForegroundColor DarkGray
 
-    Start-Process -FilePath $arma.Workbench -ArgumentList @('-gproj', "`"$gproj`"") `
-        -WorkingDirectory (Split-Path $arma.GameAddons -Parent)
+    # Dependencies must be mounted or the project refuses to load and Workbench
+    # falls back to the project picker - which looks like "it opened the default project".
+    $dirs = @($arma.GameAddons) + @($ExtraAddonsDir | Where-Object { $_ })
+    $addonsArg = ($dirs | ForEach-Object { (Resolve-Path $_).Path }) -join ','
+    Start-Process -FilePath $arma.Workbench -ArgumentList @(
+        '-addonsDir', "`"$addonsArg`"",
+        '-gproj', "`"$gproj`""
+    ) -WorkingDirectory (Split-Path $arma.GameAddons -Parent)
     Write-Host @"
 Workbench is opening. In Resource Manager:
 
@@ -172,4 +178,19 @@ if ($killed -or -not $newLog -or $text -notmatch 'WorkshopApi|Publish Addon|BACK
 
 Write-Host 'No backend errors reported. Confirm the revision on the Workshop page.' -ForegroundColor Green
 Write-LogLines $log
+
+# The CLI publish path uses placeholder metadata ("test...") when the asset was
+# first created headlessly. Fixing it once in the Publish dialog is permanent:
+# later CLI runs copy the asset's metadata forward.
+$manifest = Join-Path $PublishDir 'manifest.json'
+if (Test-Path $manifest) {
+    try {
+        $asset = (Get-Content $manifest -Raw | ConvertFrom-Json).asset
+        if ($asset.name -match '^test' -or $asset.summary -eq 'test') {
+            Write-Host "Metadata is placeholder ('$($asset.name)' / '$($asset.summary)')." -ForegroundColor Yellow
+            Write-Host 'Fix Title/Summary/Description once in the Publish dialog; later uploads keep them.' -ForegroundColor Yellow
+        }
+    }
+    catch { }
+}
 exit 0
