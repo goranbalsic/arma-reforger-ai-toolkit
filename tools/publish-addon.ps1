@@ -1,21 +1,24 @@
-# Publish (or update) an Arma Reforger addon, as headlessly as the platform allows.
+# Publish a new addon, or push headless updates of an already-published one.
 #
-#   .\publish-addon.ps1 -Project <dir>                  # first publish: opens the GUI once
-#   .\publish-addon.ps1 -Auto -PublishDir <dir> -Version 1.0.1 [-ChangeNote "fix"]
+#   .\publish-addon.ps1 -Project <dir> [-PublishDir <packed>] [-PreviewImage <png>]
+#       First publish. Pre-fills the Workbench publish dialog (bundle dir, preview
+#       image) and opens it. Title/Summary/Description are the only fields typed by
+#       hand, because the Workshop API requires a summary and no CLI switch sets it.
 #
-# Why there is still one GUI step: Workbench authenticates against the Bohemia
-# backend with a session tied to your linked Game Identity. Current builds have no
-# command-line login (no -wbBackendLogin) and no token file we can seed, so the
-# account link must be created once by a human. After that the session is cached
-# and every upload runs headless.
+#   .\publish-addon.ps1 -Auto -ModId <id> -PublishDir <packed> -Version 1.0.1 [-ChangeNote "x"] [-ExtraAddonsDir <dir>]
+#       Headless update of an existing item. Workbench must be logged in (it is,
+#       once the first publish succeeded) and the game must be closed.
 #
-# This script never asks for, stores or transmits your password.
+# Never asks for, stores or transmits a password. The only credential is
+# Workbench's own cached session.
 param(
     [string]$Project = '',
     [string]$PublishDir = '',
+    [string]$PreviewImage = '',
+    [string]$ModId = '',
     [string]$Version = '',
     [string]$ChangeNote = '',
-    [string]$PreviewImage = '',
+    [string[]]$ExtraAddonsDir = @(),
     [switch]$Auto,
     [int]$TimeoutSeconds = 240
 )
@@ -27,74 +30,100 @@ if (-not $arma.Workbench) { throw 'Workbench not found (Arma Reforger Tools)' }
 if (-not $arma.GameAddons) { throw 'Game addons folder not found' }
 
 $logsRoot = Join-Path $env:USERPROFILE 'Documents\My Games\ArmaReforgerWorkbench\logs'
+$regRoot = 'HKCU:\Software\Bohemia Interactive\Arma Reforger Workbench\Workbench\publish'
 
 function Get-LatestLog {
     Get-ChildItem $logsRoot -Directory -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending | Select-Object -First 1
 }
 
-function Show-Log($log) {
+function Write-LogLines($log) {
     if (-not $log) { return }
     Select-String -Path (Join-Path $log.FullName 'console.log') -ErrorAction SilentlyContinue `
-        -Pattern 'Publish Addon|BACKEND|Backend|WorkshopApi|login|Login|link|Link' |
-        Select-Object -Last 20 | ForEach-Object { Write-Host "  $($_.Line.Trim())" -ForegroundColor Yellow }
+        -Pattern 'Publish Addon|BACKEND|WorkshopApi|link|Link|login|Login' |
+        Select-Object -Last 15 | ForEach-Object { Write-Host "  $($_.Line.Trim())" -ForegroundColor Yellow }
 }
 
-function Start-WorkbenchGui([string]$gproj) {
-    Start-Process -FilePath $arma.Workbench -ArgumentList @('-gproj', "`"$gproj`"") `
-        -WorkingDirectory (Split-Path $arma.GameAddons -Parent)
+function Get-ProjectId([string]$gproj) {
+    $m = [regex]::Match((Get-Content $gproj -Raw), '^\s*ID\s+"([^"]+)"', 'Multiline')
+    if (-not $m.Success) { throw "No ID in $gproj" }
+    $m.Groups[1].Value
 }
 
-# ── first publish: open the GUI once ─────────────────────────────────────────
+# ── first publish: pre-fill the dialog and open it ───────────────────────────
 if (-not $Auto) {
-    if (-not $Project) { throw 'Pass -Project <folder with addon.gproj>, or -Auto -PublishDir <packed folder>' }
+    if (-not $Project) { throw 'Pass -Project <folder with addon.gproj>' }
     $Project = (Resolve-Path $Project).Path
     $gproj = Join-Path $Project 'addon.gproj'
     if (-not (Test-Path $gproj)) { throw "No addon.gproj in $Project" }
     if (Get-Process -Name 'ArmaReforgerWorkbenchSteamDiag', 'ArmaReforgerSteam' -ErrorAction SilentlyContinue) {
         throw 'Close Workbench / Arma Reforger first.'
     }
-    Start-WorkbenchGui $gproj
+
+    $modId = if ($ModId) { $ModId } else { Get-ProjectId $gproj }
+
+    # The publish dialog remembers its paths in the registry; seed them so the
+    # bundle and preview are already correct when it opens.
+    $key = Join-Path $regRoot $modId
+    New-Item -Path $key -Force | Out-Null
+    if ($PublishDir) {
+        $PublishDir = (Resolve-Path $PublishDir).Path
+        Set-ItemProperty -Path $key -Name 'dataPath' -Value $PublishDir
+    }
+    if ($PreviewImage) {
+        $PreviewImage = (Resolve-Path $PreviewImage).Path
+        Set-ItemProperty -Path $key -Name 'previewImagePath' -Value $PreviewImage
+    }
+    Write-Host "Pre-filled publish dialog for '$modId'" -ForegroundColor DarkGray
+
+    Start-Process -FilePath $arma.Workbench -ArgumentList @('-gproj', "`"$gproj`"") `
+        -WorkingDirectory (Split-Path $arma.GameAddons -Parent)
     Write-Host @"
-Workbench is opening your project. This is the one-time account link:
+Workbench is opening. In Resource Manager:
 
-  1. Resource Manager -> Publish.
-  2. Sign in with your Bohemia Interactive account (Workbench's own dialog).
-     Link your Game Identity when asked.
-  3. Fill Title / Description / Tags, choose the preview image, publish.
+  1. Publish.
+  2. Title / Summary / Description are the only fields to type - the bundle dir and
+     preview image are already set. Text is in work\<mod>\WORKSHOP.md
+     (Summary: one line, max ~200 chars. Description: the body.)
+  3. Publish. Wait for the backend to confirm.
 
-After this succeeds, `-Auto` uploads new builds with no GUI at all.
+Why these fields cannot be automated: the Workshop API rejects CreateAssetUpload
+without 'summary', and no -publishAddon* switch sets it. Once the item exists,
+updates are fully headless with -Auto.
 "@ -ForegroundColor Cyan
     exit 0
 }
 
-# ── headless upload ──────────────────────────────────────────────────────────
+# ── headless update ──────────────────────────────────────────────────────────
+if (-not $ModId) { throw 'Pass -ModId (the project ID used at first publish)' }
 if (-not $PublishDir -or -not (Test-Path $PublishDir)) { throw 'Pass -PublishDir with a packed addon folder' }
 $PublishDir = (Resolve-Path $PublishDir).Path
 if (-not (Test-Path (Join-Path $PublishDir 'data.pak'))) { throw "No data.pak in $PublishDir" }
 if (-not $Version) { throw 'Pass -Version (e.g. 1.0.1)' }
-if ($PreviewImage -and -not (Test-Path $PreviewImage)) { throw "Preview image not found: $PreviewImage" }
-
 if (Get-Process -Name 'ArmaReforgerSteam' -ErrorAction SilentlyContinue) {
     throw 'Arma Reforger is running. Close it: Workbench hangs at startup while the game owns the Steam identity.'
 }
 
+$dirs = @($arma.GameAddons) + @($ExtraAddonsDir | Where-Object { $_ })
+$addonsArg = ($dirs | ForEach-Object { (Resolve-Path $_).Path }) -join ','
+
 $before = Get-LatestLog
 $args = @(
     '-wbModule=ResourceManager',
-    '-addonsDir', "`"$($arma.GameAddons)`"",
+    '-addonsDir', "`"$addonsArg`"",
     '-publishAddon',
     '-publishAddonDir', "`"$PublishDir`"",
     '-publishAddonVersion', $Version,
     '-wbSilent', '-noThrow'
 )
 if ($ChangeNote) { $args += @('-publishAddonChangeNote', "`"$ChangeNote`"") }
-if ($PreviewImage) { $args += @('-publishAddonPreviewImage', "`"$((Resolve-Path $PreviewImage).Path)`"") }
 
-Write-Host "Headless publish $Version from $PublishDir" -ForegroundColor Cyan
+Write-Host "Headless publish of '$ModId' $Version" -ForegroundColor Cyan
 $p = Start-Process -FilePath $arma.Workbench -PassThru -ArgumentList $args
+$killed = $false
 if (-not $p.WaitForExit($TimeoutSeconds * 1000)) {
-    Write-Host "Workbench did not finish in $TimeoutSeconds s - killing it." -ForegroundColor Yellow
+    $killed = $true
+    Write-Host "Workbench did not finish in $TimeoutSeconds s - killed." -ForegroundColor Red
     try { $p.Kill() } catch { }
     Start-Sleep -Seconds 2
 }
@@ -103,38 +132,39 @@ Write-Host "Workbench exit: $($p.ExitCode) (0 is not proof either way)" -Foregro
 
 $log = Get-LatestLog
 $text = if ($log) { Get-Content (Join-Path $log.FullName 'console.log') -Raw -ErrorAction SilentlyContinue } else { '' }
+$newLog = $log -and (!$before -or $log.FullName -ne $before.FullName)
 
-if ($text -match 'not linked with Bohemia Account') {
-    Write-Host 'The account is not linked yet - a human sign-in is required exactly once.' -ForegroundColor Yellow
-    Show-Log $log
-    if ($Project) {
-        Start-WorkbenchGui (Join-Path (Resolve-Path $Project).Path 'addon.gproj')
-        Write-Host 'Workbench opened: sign in, then run this command again.' -ForegroundColor Cyan
-    }
-    else {
-        Write-Host 'Run: .\publish-addon.ps1 -Project <dir>   (opens the sign-in)' -ForegroundColor Cyan
-    }
+if ($text -match "should have required property 'summary'") {
+    Write-Host 'The item does not exist yet - the first publish needs the dialog (see -Project).' -ForegroundColor Yellow
+    Write-LogLines $log
     exit 2
 }
-
-if ($text -match 'Invalid login credentials') {
-    Write-Host 'Backend rejected the cached session. Sign in again with -Project.' -ForegroundColor Red
-    Show-Log $log
+if ($text -match 'not linked with Bohemia Account') {
+    Write-Host 'Account not linked - run without -Auto once and sign in.' -ForegroundColor Yellow
+    Write-LogLines $log
     exit 3
 }
-
-if ($text -match 'Backend is not enabled|authentication timeout|backend initialization') {
-    Write-Host 'Backend not ready (is Steam running and online?).' -ForegroundColor Red
-    Show-Log $log
+if ($text -match 'Invalid login credentials') {
+    Write-Host 'Cached session rejected - sign in again.' -ForegroundColor Red
+    Write-LogLines $log
     exit 4
 }
-
+if ($text -match 'Backend is not enabled|authentication timeout|backend initialization') {
+    Write-Host 'Backend not ready (Steam online?)' -ForegroundColor Red
+    Write-LogLines $log
+    exit 5
+}
 if ($text -match 'WorkshopApi.*\(E\)|BACKEND.*\(E\)') {
-    Write-Host 'Backend reported errors - see below.' -ForegroundColor Red
-    Show-Log $log
+    Write-Host 'Backend reported errors.' -ForegroundColor Red
+    Write-LogLines $log
     exit 1
 }
+if ($killed -or -not $newLog -or $text -notmatch 'WorkshopApi|Publish Addon|BACKEND') {
+    Write-Host 'No publish activity detected - treating as failure.' -ForegroundColor Red
+    Write-LogLines $log
+    exit 6
+}
 
-Write-Host 'No backend errors reported. Verify the item on the Workshop page.' -ForegroundColor Green
-if ($log) { Show-Log $log }
+Write-Host 'No backend errors reported. Confirm the revision on the Workshop page.' -ForegroundColor Green
+Write-LogLines $log
 exit 0

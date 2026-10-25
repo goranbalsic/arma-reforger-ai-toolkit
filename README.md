@@ -109,40 +109,50 @@ files are present.
 
 ## Publishing
 
-Workbench authenticates against the Bohemia backend with a session bound to your
-linked Game Identity. There is **no command-line login** in current builds
-(`-wbBackendLogin` is gone; the failure strings are `Backend is not enabled`,
-`authentication timeout`, `Game Identity is not linked with Bohemia Account`), so
-one human sign-in is unavoidable. After it, uploads are headless.
+Workbench uploads through the Bohemia backend. Two facts, verified against the
+shipped binary and a live attempt:
 
-Two-phase, one script:
+- There is no command-line login (`-wbBackendLogin` does not exist in current
+  builds), so Workbench's own cached session is the only credential.
+- `WorkshopApi/CreateAssetUpload` rejects a new item without a **summary**, and no
+  `-publishAddon*` switch sets it. Only the publish dialog does.
+
+So: **first publish = dialog fields, every update after = headless.**
 
 ```powershell
-# once - opens Workbench for the sign-in + first publish
-.\tools\publish-addon.ps1 -Project <dir>
+# once: pre-fills bundle dir + preview, opens the dialog for Title/Summary/Description
+.\tools\publish-addon.ps1 -Project <dir> -PublishDir <packed> -PreviewImage <png>
 
-# forever after - no GUI
-.\tools\publish-addon.ps1 -Auto -PublishDir <packed dir> -Version 1.0.1 -ChangeNote "fix"
+# forever after: no GUI
+.\tools\publish-addon.ps1 -Auto -ModId <project id> -PublishDir <packed> -Version 1.0.1 `
+    -ChangeNote "fix" -ExtraAddonsDir <dependency staging dir>
 ```
 
-`-Auto` uploads, then reads the Workbench log to classify the outcome:
+`-ExtraAddonsDir` matters: the project's dependencies must be mounted or Workbench
+refuses the project (`dependency '<GUID>' can't be added`) and never reaches the
+backend.
+
+`-Auto` classifies the outcome from the Workbench log:
 
 | Exit | Meaning |
 | --- | --- |
 | 0 | no backend errors reported |
-| 1 | backend/Workshop API reported an error |
-| 2 | account not linked yet - a human sign-in is required once |
-| 3 | cached session rejected - sign in again |
-| 4 | backend not ready (Steam offline / still booting) |
+| 1 | Workshop API error |
+| 2 | item does not exist yet - do the first publish in the dialog |
+| 3 | account not linked |
+| 4 | cached session rejected |
+| 5 | backend not ready (Steam offline) |
+| 6 | no publish activity / Workbench hung |
 
-The script kills Workbench if it hangs (it does hang at startup while the game
-owns the Steam identity) and never asks for or stores a password. Do not commit
-credentials, tokens or session files.
+A hang is treated as failure, not success - Workbench can sit forever while the
+game owns the Steam identity or while a dependency is missing.
 
-Note on "fully headless": the binary does contain a Workshop v4 upload API with
-Bearer auth, so a script could reimplement the whole login+upload pipeline. That
-means handling your account password in code and breaking whenever BI changes the
-API - not worth it, and not what this tool does.
+The script never asks for, stores or transmits a password.
+
+Note on "fully headless": the binary does contain the Workshop v4 upload API with
+Bearer auth, so a script could reimplement login and upload. That means handling
+your account password in code and breaking whenever BI changes the API - not what
+this tool does.
 
 ## Limits
 
