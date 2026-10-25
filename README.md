@@ -95,6 +95,18 @@ files are present.
 
   `-addons` accepts the folder name (the `<Name>_<GUID>` directory) or the GUID.
 
+- The game launcher **deletes preset entries it cannot resolve**, and may rewrite
+  the whole settings file on exit. Do not keep an unpublished build in a preset
+  you care about. `tools/launch-with-preset.ps1` takes a normal preset, appends
+  extra local GUIDs, and passes the whole list on the command line instead:
+
+  ```powershell
+  .\tools\launch-with-preset.ps1 -Preset "My Preset" -ExtraGuid <local guid> -DryRun
+  ```
+
+  `-DryRun` prints the resolved list and flags any GUID with no folder on disk,
+  which is what the launcher would otherwise fail on.
+
 ## Limits
 
 - Workbench is a GUI application. Its CLI covers project open, script
