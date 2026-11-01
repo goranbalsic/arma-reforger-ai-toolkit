@@ -158,6 +158,40 @@ Bearer auth, so a script could reimplement login and upload. That means handling
 your account password in code and breaking whenever BI changes the API - not what
 this tool does.
 
+## Same-path overrides: why a pak can load and do nothing
+
+A resource's identity is **not** in the pak. It lives in `resourceDatabase.rdb`,
+one record per path, with an 8-byte little-endian GUID. An override only binds if
+that GUID equals the one the base game (or another mod) uses for the same path.
+
+Workbench writes **eight zero bytes** there for resources that were authored
+outside the editor (dropped into the project as text files). The addon then loads,
+appears in `Loaded addons`, and changes nothing — the classic "my mod does
+nothing" symptom.
+
+```
+Modern Russians:  ...Officer.et 00 06 00 00 00 00 00  1f fd 22 b8 1f 31 17 51
+Unregistered:     ...Officer.et 00 04 00 00 00 00 00  00 00 00 00 00 00 00 00
+                                                    ^ GUID slot
+```
+
+Tools that deal with this:
+
+| Tool | Purpose |
+| --- | --- |
+| `tools/patch-rdb.py` | Stamp vanilla GUIDs into an RDB (`--map` JSON, or auto from the pak) |
+| `tools/fix-installed-rdb.ps1` | Re-stamp an installed addon after a Workshop update |
+| `tools/build-mod.ps1` | One command: pack → stamp → install (→ optional `-Publish <ver>`) |
+
+Two related traps:
+
+- **SVN integration.** Workbench setting `UseSVNIntegration=1` with no working
+  copy and no `svn` client makes resource registration never complete. Set it to
+  `0` unless the project really is a checkout — and if it is, commit the `.meta`
+  files, they are the GUID store.
+- **Mount order.** Same-path overrides resolve to the addon mounted last. A patch
+  must be enabled after (or be appended to the end of) the preset it patches.
+
 ## Limits
 
 - Workbench is a GUI application. Its CLI covers project open, script
