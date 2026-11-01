@@ -39,8 +39,12 @@ $packScript = Join-Path $root 'skill\arma-reforger-modding\scripts\pack-addon.ps
 $patchScript = Join-Path $root 'tools\patch-rdb.py'
 $publishScript = Join-Path $root 'tools\publish-addon.ps1'
 
-# 1. pack
+# 1. metas + pack
 if (-not $SkipPack) {
+    Write-Host '== write .meta (vanilla GUIDs) ==' -ForegroundColor Cyan
+    & $python (Join-Path $root 'tools\gen-metas.py') --project $Project --map $GuidMap
+    if ($LASTEXITCODE -ne 0) { throw 'meta generation failed' }
+
     Write-Host '== pack ==' -ForegroundColor Cyan
     $packArgs = @('-Project', $Project, '-Out', $Out)
     if ($ExtraAddonsDir) { $packArgs += @('-ExtraAddonsDir', ($ExtraAddonsDir -join ',')) }
