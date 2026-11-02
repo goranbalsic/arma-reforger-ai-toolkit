@@ -98,6 +98,33 @@ a published item is a website/account action, so it cannot be scripted through
 Workbench at all - it needs an authenticated browser session (Steam OpenID), after
 which the site's own request can be replayed from that tab.
 
+## Factions: a swapped unit must join the faction of the group it spawns for
+
+Replacing a prefab with one from another faction leaves the unit on its **own**
+faction key (`RHS_ION`, `RHS_AFRF`), so two swapped squads of the same side treat
+each other as hostiles and fight. The affiliation can be overridden from the clone,
+but the component instance ID must be the one the **base** prefab uses, otherwise a
+second affiliation component is added instead of replacing the inherited one:
+
+```
+Character_RHS_ION_base.et    SCR_CharacterFactionAffiliationComponent "{6239642BBB275066}" -> RHS_ION
+Character_RHS_AFRF_Base.et   SCR_CharacterFactionAffiliationComponent "{6062F6587469882D}" -> RHS_AFRF
+Character_FIA_base.et        SCR_CharacterFactionAffiliationComponent "{555C98D1CD949F3E}" -> FIA
+Character_USSR_Base.et       SCR_CharacterFactionAffiliationComponent "{520EC9618276DF23}" -> USSR
+```
+
+Cloned prefabs therefore insert `SCR_CharacterFactionAffiliationComponent
+"<id of the RHS base>" { "faction affiliation" "<vanilla key>" }` right after
+`components {`.
+
+## A clone is only half the mechanism
+
+Cloning prefabs into the addon (new GUIDs, own folder) is what makes the spawn
+substitution legal, but individual placement still works only because of the
+`SCR_PlacingEditorComponentClass` hook pair. A mod that ships clones without the
+hooks spawns nothing new in Game Master.
+
+
 ## Editor placement: two hooks, not one
 
 Game Master places single entities through the content browser, which resolves the
