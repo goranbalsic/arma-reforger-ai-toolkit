@@ -151,3 +151,8 @@ the replacement prefabs carry their own faction and fall outside the faction fil
 **no `.meta` files**, and its `resourceDatabase.rdb` stamps the same GUIDs as the base
 game (`Character_USSR_AAT.et` = `631158F6898738A4` in both). That is why the override
 wins. A mod that ships a same-path prefab with a *different* GUID silently loses.
+
+Neither of our mods relies on this: both ship their replacements under their own
+paths with their own GUIDs and redirect at spawn time. (It was also the reason a
+"combine with Modern Russians" build made no sense to ship as a dependency — the user
+does not have that mod installed.)
