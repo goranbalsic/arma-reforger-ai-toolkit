@@ -51,6 +51,29 @@ list only ID, GUID, TITLE, Dependencies, Configurations, EngineUserSettingsPath.
 So: create the item once in the Publish dialog; every later version can be pushed
 headless. This is a backend requirement, not a missing flag.
 
+### Headless alternative: reuse an existing item
+
+Because the only blocked operation is *creating* the asset, publishing a new mod
+headlessly means pointing the project's `GUID` at an item that already exists.
+Claimed versions cannot be reused:
+
+```
+400 apiCode="workshopApi.assetVersionAlreadyExists"
+Version 1.0.0 of asset <GUID> already exists
+```
+
+so bump above the item's highest version. The item keeps its old title/summary until
+someone edits them in the dialog, and existing subscribers get the new content.
+
+## A fabricated workshop-state file makes a local mod "corrupted"
+
+The game treats an addon as Workshop-managed when
+`profile\.save\app<APPID>_user<STEAMID>\workshop\I<GUID>.json` exists. Writing that
+file for a mod that is not on the Workshop (to force it "enabled") makes the game try
+to verify/download it and report the addon as corrupted. Local test addons need just
+the folder with `addon.gproj` + `data.pak` + `resourceDatabase.rdb` and the GUID in
+`-addons`.
+
 ## Workbench leaves no token on disk
 
 Searched both profiles (`Documents\My Games\ArmaReforger*`) and `AppData\Local` for
