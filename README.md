@@ -215,6 +215,8 @@ directly; no game code or assets are included.
 Workbench and Arma Reforger are property of Bohemia Interactive. This project is
 unaffiliated tooling for mods you own or are authorised to examine.
 
+- docs/re-toolchain.md - the RE stack that is installed, why the rest of the list is skipped, and what to reverse first.
+
 ## License
 
 MIT - see `LICENSE`.
