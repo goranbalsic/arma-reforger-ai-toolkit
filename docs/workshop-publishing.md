@@ -153,6 +153,11 @@ game (`Character_USSR_AAT.et` = `631158F6898738A4` in both). That is why the ove
 wins. A mod that ships a same-path prefab with a *different* GUID silently loses.
 
 Neither of our mods relies on this: both ship their replacements under their own
-paths with their own GUIDs and redirect at spawn time. (It was also the reason a
-"combine with Modern Russians" build made no sense to ship as a dependency — the user
-does not have that mod installed.)
+paths with their own GUIDs and redirect at spawn time.
+
+Consequence for dependencies: Workbench derives the published dependency list from
+the *resources packed in the bundle*, not from `addon.gproj`. A mod that only points
+at vanilla paths (because another mod overrides those same paths) contributes no GUID
+of its own to reference, so **the dependency on it cannot be expressed headlessly** —
+`asset.dependencies` will not list it. The Publish dialog's dependency picker is the
+only way; functionally the mod still works as long as that mod is installed.
