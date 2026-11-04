@@ -161,3 +161,17 @@ at vanilla paths (because another mod overrides those same paths) contributes no
 of its own to reference, so **the dependency on it cannot be expressed headlessly** —
 `asset.dependencies` will not list it. The Publish dialog's dependency picker is the
 only way; functionally the mod still works as long as that mod is installed.
+
+## Evidence from the game log (2026-11-04)
+
+Game Master individual placement prints the prefab it actually spawned:
+
+`
+INFO: Editor EDIT: Player <name> spawned Character_USSR_Officer.et prefab at <...>
+`
+
+When a same-path override mod was the only mechanism, that line still showed the
+vanilla prefab, i.e. the override never applied - the base game's registration wins
+regardless of the addon order in \-addons\. With the spawn hooks in place the same
+line shows the substituted prefab. Use this line as the pass/fail test for any
+replacement mod; do not judge by what the unit wears in the deploy menu.
