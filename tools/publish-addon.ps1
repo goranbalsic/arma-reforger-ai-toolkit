@@ -121,13 +121,25 @@ $addonsArg = ($dirs | ForEach-Object { (Resolve-Path $_).Path }) -join ','
 $before = Get-LatestLog
 $args = @(
     '-wbModule=ResourceManager',
-    '-addonsDir', "`"$addonsArg`"",
+    '-addonsDir', "`"$addonsArg`""
+)
+# -gproj is required, otherwise Workbench waits on the project picker and hangs
+if ($Project) {
+    $gproj = Join-Path (Resolve-Path $Project).Path 'addon.gproj'
+    if (-not (Test-Path $gproj)) { throw "No addon.gproj in $Project" }
+    $args += @('-gproj', "`"$gproj`"")
+}
+$args += @(
     '-publishAddon',
     '-publishAddonDir', "`"$PublishDir`"",
     '-publishAddonVersion', $Version,
     '-wbSilent', '-noThrow'
 )
 if ($ChangeNote) { $args += @('-publishAddonChangeNote', "`"$ChangeNote`"") }
+if ($PreviewImage) {
+    if (-not (Test-Path $PreviewImage)) { throw "No preview image at $PreviewImage" }
+    $args += @('-publishAddonPreviewImage', "`"$((Resolve-Path $PreviewImage).Path)`"")
+}
 
 Write-Host "Headless publish of '$ModId' $Version" -ForegroundColor Cyan
 $p = Start-Process -FilePath $arma.Workbench -PassThru -ArgumentList $args
