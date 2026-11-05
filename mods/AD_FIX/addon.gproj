@@ -4,7 +4,7 @@ GameProject {
  TITLE "AD_FIX - ArmaDudes 1.9 crash fix"
  Dependencies {
   "58D0FB3206B6F859"
-  "4FD4A1BD550793F4"
+  "595F2BF2F44836FB"
  }
  Configurations {
   GameProjectConfig PC {

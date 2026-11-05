@@ -1,7 +1,8 @@
 # Workshop text for AD_FIX
 
-Paste these into the Publish dialog. The Title must not start with "test" and the
-Summary must not be empty, or the Workshop backend rejects the item.
+The item was first created with placeholder metadata ("AD_FIX - test" /
+"testing" / "test"). The CLI copies that forward, so correct it once in the
+Publish dialog; later headless updates keep the corrected fields.
 
 ## Title
 
@@ -9,21 +10,15 @@ AD_FIX - Arma Reforger 1.9 Crash Fix
 
 ## Summary (one line)
 
-Repairs Creature Melee AI's StopLoitering override for Arma Reforger 1.9, which otherwise stops the Game module compiling and crashes the Arma Dudes 1 preset.
+Repairs RHS - Status Quo's SetAuthor and wheel-slot overrides for Arma Reforger 1.9, which otherwise stop the Game module compiling and crash the Arma Dudes 1 preset.
 
 ## Description
 
-Arma Reforger 1.9 added a parameter to StopLoitering:
+Arma Reforger 1.9 changed two APIs that RHS - Status Quo 0.16.5237 still uses the old way:
 
-    void StopLoitering(bool terminateFast, SCR_LoiterCustomAnimData customAnimData = null)
+- SCR_EditableEntityComponent.SetAuthor(int) became SetAuthor(int, bool isGM).
+- SCR_WheelSlotInfo.m_iWheelIndex was replaced by GetWheelIndex().
 
-Creature Melee AI still overrides the old single-parameter version, so the whole Game script module fails to compile with:
+Both stop the Game script module compiling. AD_FIX ships patched copies of the two affected RHS files. RHS stays enabled and provides all other content.
 
-    CMAI_PersonThrow.c(107): Overloaded function 'StopLoitering' not compatible
-    CMAI_CarryPresentation.c(145): Overloaded function 'StopLoitering' not compatible
-
-AD_FIX ships the mod's script set with both overrides updated and forwards the new argument. Creature Melee AI keeps providing all content and assets.
-
-Requirements:
-- Creature Melee AI (4FD4A1BD550793F4), enabled.
-- Load AD_FIX after Creature Melee AI.
+Requirements: RHS - Status Quo (595F2BF2F44836FB). Load AD_FIX after it.

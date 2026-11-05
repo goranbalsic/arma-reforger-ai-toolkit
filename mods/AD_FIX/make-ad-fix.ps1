@@ -1,14 +1,15 @@
-# Build AD_FIX - the Creature Melee AI scripts patched for Arma Reforger 1.9.
+# Build AD_FIX - the Arma Reforger 1.9 compatibility patch for RHS - Status Quo.
 #
-# The 1.9 update added a second parameter to StopLoitering; the Workshop mod still
-# overrides the old single-parameter version, so the Game module fails to compile
-# and the game crashes at startup. This script extracts the installed mod, applies
-# the signature fix, packs a standalone addon and installs it next to the mod.
+# 1.9 changed two APIs RHS still overrides/reads: SetAuthor gained a bool, and
+# SCR_WheelSlotInfo's protected field became a getter. The Game module fails to
+# compile until they are updated. This extracts the files, patches them, packs
+# AD_FIX and installs it. The build dependency on RHS is stripped from the
+# published addon.gproj so the Workshop item carries no dependency entry.
 #
 #   powershell -ExecutionPolicy Bypass -File mods\AD_FIX\make-ad-fix.ps1
 param(
-    [string]$GameAddons = "$env:USERPROFILE\Documents\My Games\ArmaReforger\addons",
-    [string]$GameData = 'C:\Program Files (x86)\Steam\steamapps\common\Arma Reforger\addons',
+    [string]$GameAddons = 'C:\Program Files (x86)\Steam\steamapps\common\Arma Reforger\addons',
+    [string]$UserAddons = "$env:USERPROFILE\Documents\My Games\ArmaReforger\addons",
     [string]$ArmaAi = 'C:\Users\Administrator\Documents\Default Project\arma-ai',
     [string]$Out = '',
     [switch]$NoDeploy
@@ -17,48 +18,49 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $refpak = Join-Path $repo 'skill\arma-reforger-modding\scripts\refpak.py'
+$rhsPak = Join-Path $UserAddons 'RHS-StatusQuo_595F2BF2F44836FB\data.pak'
+if (-not (Test-Path $rhsPak)) { throw "RHS - Status Quo is not installed: $rhsPak" }
 if (-not $Out) { $Out = Join-Path $ArmaAi 'build\ad-fix' }
 
-$src = Join-Path $GameAddons 'CreatureMeleeAI_4FD4A1BD550793F4'
-if (-not (Test-Path (Join-Path $src 'data.pak'))) { throw "Creature Melee AI is not installed: $src" }
+# One entry per 1.9 break; each must match exactly once in the installed file.
+$patches = @(
+    @{
+        rel = 'Scripts/Game/Editor/Components/EditableEntity/RHS_CAS_EditableEntityComponent.c'
+        old = "override void SetAuthor(int playerID)`r`n`t{`r`n`t`tsuper.SetAuthor(playerID);"
+        new = "override void SetAuthor(int playerID, bool isGM = false)`r`n`t{`r`n`t`tsuper.SetAuthor(playerID, isGM);"
+    },
+    @{
+        rel = 'Scripts/Game/Vehicle/RHS_DestructionTireComponent.c'
+        old = 'return m_iWheelIndex;'
+        new = 'return GetWheelIndex();'
+    }
+)
 
 $work = Join-Path $ArmaAi 'work\ad-fix'
 Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
-python $refpak extract (Join-Path $src 'data.pak') $work .c | Out-Null
+foreach ($patch in $patches) {
+    $dst = Join-Path $work $patch.rel.Replace('/', '\')
+    New-Item -ItemType Directory -Force (Split-Path $dst -Parent) | Out-Null
+    $raw = (python $refpak cat $rhsPak "/$($patch.rel)") -join "`r`n"
+    [IO.File]::WriteAllText($dst, $raw, (New-Object Text.UTF8Encoding($false)))
 
-# --- the 1.9 fix: StopLoitering(bool, SCR_LoiterCustomAnimData = null) ---
-$files = @(
-    'Scripts\Game\CreatureMeleeAI\Actions\CMAI_PersonThrow.c',
-    'Scripts\Game\CreatureMeleeAI\Actions\CMAI_CarryPresentation.c'
-)
-$oldSig = 'override void StopLoitering(bool terminateFast)'
-$newSig = 'override void StopLoitering(bool terminateFast, SCR_LoiterCustomAnimData customAnimData = null)'
-$oldSuper = 'super.StopLoitering(terminateFast);'
-$newSuper = 'super.StopLoitering(terminateFast, customAnimData);'
-
-foreach ($rel in $files) {
-    $path = Join-Path $work $rel
-    $text = [IO.File]::ReadAllText($path)
-    foreach ($pair in @(@($oldSig, $newSig), @($oldSuper, $newSuper))) {
-        $count = ([regex]::Matches($text, [regex]::Escape($pair[0]))).Count
-        if ($count -ne 1) { throw "${rel}: expected 1 occurrence of '$($pair[0])', found $count - upstream file changed" }
-        $text = $text.Replace($pair[0], $pair[1])
-    }
-    [IO.File]::WriteAllText($path, $text, (New-Object Text.UTF8Encoding($false)))
+    $text = [IO.File]::ReadAllText($dst)
+    $old = $patch.old
+    $new = $patch.new
+    if ($text -notmatch "`r`n") { $old = $old -replace "`r`n", "`n"; $new = $new -replace "`r`n", "`n" }
+    $count = ([regex]::Matches($text, [regex]::Escape($old))).Count
+    if ($count -ne 1) { throw "$($patch.rel): expected 1 match, found $count - upstream may already be fixed" }
+    [IO.File]::WriteAllText($dst, $text.Replace($old, $new), (New-Object Text.UTF8Encoding($false)))
 }
 
 Copy-Item (Join-Path $PSScriptRoot 'addon.gproj') $work -Force
-Copy-Item (Join-Path $PSScriptRoot 'WORKSHOP.md') $work -Force
-Remove-Item (Join-Path $work 'resourceDatabase.rdb') -Force -ErrorAction SilentlyContinue
 Remove-Item $Out -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $Out | Out-Null
 
 $workbench = 'C:\Program Files (x86)\Steam\steamapps\common\Arma Reforger Tools\Workbench\ArmaReforgerWorkbenchSteamDiag.exe'
-# The mod is mounted only so the project can declare it as a dependency; AD_FIX's
-# own copies of the scripts win the same-path lookup.
 $p = Start-Process $workbench -PassThru -ArgumentList @(
     '-wbModule=ResourceManager',
-    '-addonsDir', "`"$GameData,$GameAddons`"",
+    '-addonsDir', "`"$GameAddons,$UserAddons`"",
     '-gproj', "`"$(Join-Path $work 'addon.gproj')`"",
     '-packAddon', '-packAddonDir', "`"$Out`"",
     '-wbSilent', '-noThrow'
@@ -66,9 +68,18 @@ $p = Start-Process $workbench -PassThru -ArgumentList @(
 $null = $p.WaitForExit(600000)
 if (-not (Test-Path (Join-Path $Out 'data.pak'))) { throw 'Pack failed - see the newest ArmaReforgerWorkbench log' }
 
-# Self-check: the packed script must carry the new signature.
-$packed = python $refpak cat (Join-Path $Out 'data.pak') '/Scripts/Game/CreatureMeleeAI/Actions/CMAI_PersonThrow.c' | Out-String
-if ($packed -notmatch [regex]::Escape($newSig)) { throw 'Packed CMAI_PersonThrow.c does not contain the 1.9 signature' }
+# Self-check: every patched line is in the pak.
+foreach ($patch in $patches) {
+    $packed = python $refpak cat (Join-Path $Out 'data.pak') "/$($patch.rel)" | Out-String
+    $marker = ($patch.new -split "`r?`n")[0]
+    if ($packed -notmatch [regex]::Escape($marker)) { throw "Packed $($patch.rel) is missing: $marker" }
+}
+
+# The build needs RHS mounted, but the published item must not declare a
+# dependency (1.9's Workshop download UI throws on our dependency entries).
+$gproj = Join-Path $Out 'addon.gproj'
+$g = [IO.File]::ReadAllText($gproj) -replace '\s*"595F2BF2F44836FB"', ''
+[IO.File]::WriteAllText($gproj, $g, (New-Object Text.UTF8Encoding($false)))
 Write-Host "Built $Out" -ForegroundColor Green
 
 if (-not $NoDeploy) {
