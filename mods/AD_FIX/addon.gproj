@@ -1,0 +1,15 @@
+GameProject {
+ ID "AD_FIX"
+ GUID "ADF1000000000001"
+ TITLE "AD_FIX - ArmaDudes 1.9 crash fix"
+ Dependencies {
+  "58D0FB3206B6F859"
+  "4FD4A1BD550793F4"
+ }
+ Configurations {
+  GameProjectConfig PC {
+  }
+  GameProjectConfig HEADLESS {
+  }
+ }
+}

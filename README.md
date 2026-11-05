@@ -216,6 +216,7 @@ Workbench and Arma Reforger are property of Bohemia Interactive. This project is
 unaffiliated tooling for mods you own or are authorised to examine.
 
 - docs/re-toolchain.md - the RE stack that is installed, why the rest of the list is skipped, and what to reverse first.
+- mods/AD_FIX/ - a worked 1.9 crash fix: the Creature Melee AI `StopLoitering` signature patch and its rebuild script.
 
 ## License
 
