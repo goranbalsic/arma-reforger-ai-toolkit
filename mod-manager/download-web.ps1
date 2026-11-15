@@ -1,4 +1,4 @@
-﻿param([switch]$Check)
+param([switch]$Check)
 # Arma Reforger mod manager - local web dashboard: batch downloader, live server
 # browser, per-server queue-first, launcher presets, client addon sync.
 # double-click the .cmd: serves http://localhost:8123 and opens your browser.
@@ -409,6 +409,19 @@ function Invoke-ResumeBatch {
   "full batch resumed: $($mods.Count) mods remaining ($r)"
 }
 
+function Invoke-StartQueue {
+  # start whatever is queued. Never rebuilds: "Queue all missing" is the button that
+  # fills the queue again, so Clear queue + Start stays clear.
+  $j = Get-Content $Cfg -Raw | ConvertFrom-Json
+  if (@($j.game.mods).Count -eq 0) {
+    return 'queue is empty - press Queue all missing to fetch every missing mod of your servers'
+  }
+  & "$PSScriptRoot\trim-config.ps1" | Out-Null
+  $r = Start-DS
+  $left = @((Get-Content $Cfg -Raw | ConvertFrom-Json).game.mods).Count
+  "started with $left queued mods ($r)"
+}
+
 function Invoke-MakePreset([string]$Id) {
   $out = & "$PSScriptRoot\make-preset.ps1" -ServerId $Id
   ($out | Out-String).Trim()
@@ -603,6 +616,7 @@ $html = @'
  .cols{display:flex;gap:14px;max-width:920px;margin:0 auto 14px;align-items:flex-start}
  .cols>.card{flex:1;margin:0;min-width:0}
  #queue{max-height:300px;overflow:auto}
+ .f{background:#26282e;border:1px solid #3a3d45;color:#d6d8de;border-radius:6px;padding:5px 9px;font-size:12px;width:100%;box-sizing:border-box;margin:6px 0}
  #queue ol{margin:0;padding-left:22px;font-size:13px;line-height:1.6}
  #srv{max-height:360px;overflow:auto}
  #rec{max-height:360px;overflow:auto}
@@ -622,8 +636,8 @@ $html = @'
  <div class="bar"><div id="tbar" style="width:0%"></div></div>
  <div class="row"><span id="cnt" class="dim"></span><span class="dim" id="etabox"></span></div>
  <div style="margin-top:14px">
-  <button id="bstart" onclick="act('start')">Start / Resume</button>
-  <button id="bresumeall" onclick="act('resume-all')">Resume all</button>
+  <button id="bstart" onclick="act('start')">Start</button>
+  <button id="bresumeall" onclick="act('resume-all')">Queue all missing</button>
   <button id="bpause" class="grey" onclick="act('pause')">Pause</button>
   <button id="bclear" class="grey" onclick="act('clear-queue')">Clear queue</button>
   <button id="bverify" class="amber" onclick="act('verify')">Verify mods</button>
@@ -633,21 +647,62 @@ $html = @'
  <div id="failed" class="bad" style="font-size:13px;margin-top:4px"></div>
 </div>
 <div class="cols">
- <details class="card" open><summary><h2 style="font-size:15px;color:#fff">Queue <span id="qcount" class="dim"></span> <span id="qpreview" class="dim" style="font-size:13px"></span></h2></summary><div id="queue" class="dim" style="margin-top:8px">-</div></details>
- <details class="card" open><summary><h2 style="font-size:15px;color:#fff">Downloading now <span id="actcount" class="dim"></span></h2></summary><div id="act" style="margin-top:8px"></div></details>
+ <details class="card" open><summary><h2 style="font-size:15px;color:#fff">Queue <span id="qcount" class="dim"></span> <span id="qpreview" class="dim" style="font-size:13px"></span></h2></summary>
+  <input class="f" id="fq" placeholder="filter queue by name..." oninput="FILTER.queue=this.value;renderAll()">
+  <div id="queue" class="dim">-</div></details>
+ <details class="card" open><summary><h2 style="font-size:15px;color:#fff">Downloading now <span id="actcount" class="dim"></span></h2></summary>
+  <input class="f" id="fa" placeholder="filter downloads by name..." oninput="FILTER.act=this.value;renderAll()">
+  <div id="act">-</div></details>
 </div>
 <details class="card" open><summary><h2 style="font-size:15px;color:#fff">Server browser <span class="dim">live</span></h2></summary>
  <div style="margin-top:8px"><input id="bq" placeholder="search servers (e.g. PVE, Cold Front, Vietnam)..." oninput="browseCleared()" onkeydown="if(event.key==='Enter')browse()"><button onclick="browse()">Search</button></div>
  <div id="bs" class="dim" style="margin-top:8px">type a server name and press Enter</div>
 </details>
 <details class="card" open><summary><h2 style="font-size:15px;color:#fff">Servers <span id="srvcount" class="dim"></span><button class="mini" onclick="refreshSrv(event)" title="re-read disk + pull fresh modlists from reforgermods.net">Refresh all</button></h2></summary><div id="srv" class="dim" style="margin-top:8px">loading server lists...</div></details>
-<details class="card"><summary><h2 style="font-size:15px;color:#fff">Completed <span id="reccount" class="dim"></span></h2></summary><ul id="rec"></ul></details>
+<details class="card"><summary><h2 style="font-size:15px;color:#fff">Completed <span id="reccount" class="dim"></span></h2></summary>
+ <input class="f" id="fr" placeholder="filter completed mods by name..." oninput="FILTER.rec=this.value;renderAll()">
+ <ul id="rec"></ul></details>
 <script>
 let T='__T__';   // refreshed from /status so an open page survives dashboard restarts
 function esc(x){return String(x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 function sz(b){return b>=1073741824?(b/1073741824).toFixed(b>=107374182400?2:3)+' GB':b>=1048576?(b/1048576).toFixed(1)+' MB':b>=1024?(b/1024).toFixed(1)+' KB':Math.round(b)+' B'}
 function left(sec){ if(!isFinite(sec)||sec<=0) return '--'; const h=Math.floor(sec/3600), m=Math.round((sec%3600)/60); return h>0?(h+'h '+m+'m'):(m+' min'); }
 let SRV=null,BR=null,lastKey='';
+let FILTER={queue:'',act:'',rec:''},LAST=null;
+function match(name,q){ return !q || String(name).toLowerCase().indexOf(q.toLowerCase())>=0; }
+function renderActive(list,A){
+  const el=document.getElementById('act'); if(!el)return;
+  const shown=list.filter(a=>match(a.name,FILTER.act));
+  document.getElementById('actcount').textContent=list.length?'('+list.length+')':'';
+  el.innerHTML=shown.length
+   ?shown.map(a=>'<div class="row"><span>'+esc(a.name)+'</span><span class="dim">'+(a.expB>0?(sz(a.b)+' / '+sz(a.expB)):sz(a.b)+' (size unknown)')+'</span></div>'+
+     (a.expB>0?'<div class="bar amber"><div style="width:'+a.pct+'%"></div></div>':'')).join('')
+   :(list.length?'<span class="dim">no download matches the filter</span>':'<span class="dim">nothing downloading right now</span>');
+}
+function renderQueue(queue,A){
+  const el=document.getElementById('queue'); if(!el)return;
+  document.getElementById('qcount').textContent='('+queue.length+')';
+  const qp=document.getElementById('qpreview');
+  if(qp)qp.textContent=queue.length?(' - '+queue.slice(0,3).map(q=>q.name).join(' · ')+(queue.length>3?' …':'')):'';
+  const shown=queue.filter(q=>match(q.name,FILTER.queue));
+  el.innerHTML=shown.length
+   ?'<ol>'+shown.map(q=>'<li>'+(A[q.id]?'<span class="warn">&#10227;</span> ':'')+esc(q.name)+'</li>').join('')+'</ol>'
+   :'<span class="dim">'+(queue.length?'no mod matches the filter':'queue is empty')+'</span>';
+}
+function renderRec(recent){
+  const el=document.getElementById('rec'); if(!el)return;
+  document.getElementById('reccount').textContent='('+recent.length+')';
+  const shown=recent.filter(r=>match(r.name,FILTER.rec)).slice(0,400);
+  el.innerHTML=shown.length
+   ?shown.map(r=>'<li class="ok">&#10003; '+esc(r.name)+' <span class="dim">'+sz(r.b)+'</span></li>').join('')
+   :'<li class="dim">'+(recent.length?'nothing matches the filter':'nothing finished yet')+'</li>';
+}
+function renderAll(){
+  if(!LAST)return;
+  renderActive(LAST.active,LAST.A);
+  renderQueue(LAST.queue,LAST.A);
+  renderRec(LAST.recent);
+}
 async function loadSrv(){try{SRV=await (await fetch('/servers')).json();lastKey='';}catch(e){}}
 function renderSrv(D,A,B){
  if(!SRV)return;
@@ -727,29 +782,17 @@ async function tick(){
   document.getElementById('cnt').textContent=s.doneCount+' / '+s.totalMods+' mods assembled';
   const eta=(s.speedB>51200)?left((s.totalB-s.doneB)/s.speedB):'--';
   document.getElementById('etabox').textContent=eta;
-  document.getElementById('actcount').textContent=s.active.length?'('+s.active.length+')':'';
-  document.getElementById('act').innerHTML=s.active.length
-   ?s.active.map(a=>
-    '<div class="row"><span>'+esc(a.name)+'</span><span class="dim">'+(a.expB>0?(sz(a.b)+' / '+sz(a.expB)):sz(a.b)+' (size unknown)')+'</span></div>'+
-    (a.expB>0?'<div class="bar amber"><div style="width:'+a.pct+'%"></div></div>':'')).join('')
-   :'<span class="dim">nothing downloading right now</span>';
   const D={},A={},B={};
   s.recent.forEach(r=>{D[r.id]=1;B[r.id]=r.b});
   s.active.forEach(a=>{A[a.id]=1});
   (s.cl||[]).forEach(id=>{D[id]=1});   // installed client-side before the batch counts as on disk
+  LAST={recent:s.recent||[],active:s.active||[],queue:s.queue||[],D:D,A:A,B:B};
+  renderActive(s.active||[],A);
   const key=s.recent.length+'|'+(s.cl||[]).length+'|'+(s.queue||[]).length+'|'+s.active.map(a=>a.id).join(',');
   if(key!==lastKey){          // lists only re-render when something actually finished/started
    lastKey=key;
-   document.getElementById('qcount').textContent='('+((s.queue||[]).length)+')';
-   const qp=document.getElementById('qpreview');
-   if(qp)qp.textContent=(s.queue||[]).length?(' - '+s.queue.slice(0,3).map(q=>q.name).join(' · ')+((s.queue.length>3)?' …':'')):'';
-   document.getElementById('queue').innerHTML=(s.queue||[]).length
-    ?'<ol>'+s.queue.map(q=>'<li>'+(A[q.id]?'<span class="warn">&#10227;</span> ':'')+esc(q.name)+'</li>').join('')+'</ol>'
-    :'<span class="dim">queue is empty</span>';
-   document.getElementById('reccount').textContent='('+s.recent.length+')';
-   document.getElementById('rec').innerHTML=s.recent.length
-    ?s.recent.map(r=>'<li class="ok">&#10003; '+esc(r.name)+' <span class="dim">'+sz(r.b)+'</span></li>').join('')
-    :'<li class="dim">nothing finished yet</li>';
+   renderQueue(LAST.queue,A);
+   renderRec(LAST.recent);
    renderSrv(D,A,B);
   }
   const f=document.getElementById('failed');
@@ -798,7 +841,7 @@ async function act(w){
  const b=event?event.target:null; if(b){b.disabled=true;b.textContent='...';}
  say(w==='start'?'starting / resuming the download...':w==='pause'?'pausing...':w==='clear-queue'?'clearing the queue...':w==='resume-all'?'queuing every missing mod of your servers...':'checking installed mods against the Workshop...');
  await post(w);
- if(b){b.disabled=false;b.textContent=w==='start'?'Start / Resume':w==='pause'?'Pause':w==='clear-queue'?'Clear queue':w==='resume-all'?'Resume all':'Verify mods';}
+ if(b){b.disabled=false;b.textContent=w==='start'?'Start / Resume':w==='pause'?'Pause':w==='clear-queue'?'Clear queue':w==='resume-all'?'Queue all missing':'Verify mods';}
 }
 loadSrv();
 (async function loop(){ await tick(); setTimeout(loop,200); })();   // one request in flight, ~0.4 s cadence
@@ -898,7 +941,7 @@ while ($l.IsListening) {
         $ctx.Response.ContentType = 'application/json'
         $ctx.Response.OutputStream.Write($b, 0, $b.Length)
       }
-      '/start'  { $msg = Start-DS;        Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Green }
+      '/start'  { $msg = Invoke-StartQueue;  Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Green }
       '/pause'  { $msg = Stop-DS;         Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Yellow }
       '/verify' { $msg = Invoke-Verify;   Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Cyan }
       '/queue-server' { $msg = Invoke-QueueServer $ctx.Request.QueryString['id']; Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Green }
@@ -924,3 +967,5 @@ while ($l.IsListening) {
   }
   finally { $ctx.Response.OutputStream.Close() }
 }
+
+
