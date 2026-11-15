@@ -33,6 +33,7 @@ if (Test-Path $ServersPath) {
 }
 
 $verify = $null   # last verify result shown on the page
+$script:maxDone = [double]0; $script:maxDoneTotal = [double]0   # high-water progress: the DS deletes temp files, so raw bytes dip
 
 $ApiBase = 'https://api.reforgermods.net/v2'
 $ApiH = @{ 'User-Agent' = 'arma-reforger-ai-toolkit/1.0' }
@@ -155,6 +156,11 @@ function Get-Status {
       $doneBytes += if ($exp -gt 0) { [Math]::Min([double]$d.bytes, $exp) } else { [double]$d.bytes }
     } elseif ($clSet.ContainsKey($id)) { $doneBytes += $exp }
   }
+  # never let the bar walk backwards: the DS removes <mod>\temp\ before assembling,
+  # which briefly lowers the byte count (that was the "goes up and down" effect)
+  if ($script:maxDoneTotal -ne $TotalBytes) { $script:maxDoneTotal = [double]$TotalBytes; $script:maxDone = [double]0 }
+  if ($doneBytes -gt $script:maxDone) { $script:maxDone = $doneBytes }
+  $doneBytes = [Math]::Min($script:maxDone, [double]$TotalBytes)
 
   # complete = folder stable (no writes 2 min) AND assembled AND size matches Workshop (when known).
   # the DS writes gproj/meta/rdb before the data paks, so "assembled" alone lies mid-download.
@@ -366,10 +372,53 @@ function Invoke-AddServer([string]$Id) {
   "added '$name': $($new.Count) new mods (~$gb GB) queued at the end, $(@($s.mods).Count - $new.Count) already on disk ($r)"
 }
 
+function Invoke-RefreshServers {
+  # global refresh: drop every cache, re-read the local state files, then pull a
+  # fresh modlist for each tracked server (real counts, not cached ones)
+  $script:bCache = @{}; $script:bCacheAt = @{}
+  $script:dCache = @{}; $script:dCacheAt = @{}
+  $script:dirCacheAt = (Get-Date).AddMinutes(-10)   # force a disk rescan
+  $script:clCacheAt = (Get-Date).AddMinutes(-10)
+  $sz = Get-Content $Sizes -Raw | ConvertFrom-Json
+  foreach ($p in $sz.mods.PSObject.Properties) { $sizeMap[$p.Name] = $p.Value }
+  # only fill sizes for mods that belong to the batch: adding every id a server
+  # reports would silently grow the batch (703 -> 839) and change its meaning
+  $known = @{}
+  foreach ($id in $sizeMap.Keys) { $known[$id] = $true }
+  foreach ($m in (Get-Content $Cfg -Raw | ConvertFrom-Json).game.mods) { $known[$m.modId] = $true }
+  $ok = 0; $fail = 0
+  foreach ($sv in $serverList) {
+    try {
+      $d = Invoke-RestMethod -Uri "$ApiBase/servers/$($sv.id)" -Headers $ApiH -TimeoutSec 20
+      if (-not $d.server -or -not @($d.server.mods).Count) { $fail++; continue }
+      $sv.mods = @($d.server.mods | ForEach-Object {
+        $m = $_
+        if (-not $sizeMap.ContainsKey($m.id) -and $known.ContainsKey($m.id) -and $m.sizeKnown -and $m.size) {
+          $sizeMap[$m.id] = @{ name = $m.name; bytes = [double]$m.size; exact = $true }
+          $sz.mods | Add-Member -NotePropertyName $m.id -NotePropertyValue ([PSCustomObject]@{ name = $m.name; bytes = [double]$m.size; exact = $true }) -Force
+        }
+        $e = if ($sizeMap[$m.id]) { [double]$sizeMap[$m.id].bytes } else { [double]0 }
+        [PSCustomObject]@{ id = $m.id; name = $m.name; e = $e }
+      })
+      $ok++
+    } catch { $fail++ }
+    Start-Sleep -Milliseconds 300   # stay under the free tier (60/min)
+  }
+  @{ servers = $serverList } | ConvertTo-Json -Depth 6 | Set-Content $ServersPath -Encoding UTF8
+  $script:TotalBytes = ($sizeMap.Values | ForEach-Object { [double]$_.bytes } | Measure-Object -Sum).Sum
+  $sz.totalBytes = [double]$script:TotalBytes
+  $sz | ConvertTo-Json -Depth 4 | Set-Content $Sizes -Encoding UTF8
+  $have = Get-HaveIds
+  $onDisk = 0
+  foreach ($sv in $serverList) { $onDisk += @($sv.mods | Where-Object { $have.ContainsKey($_.id) }).Count }
+  $st = Get-Status
+  "refreshed $ok/$(@($serverList).Count) servers$(if ($fail) { " ($fail unreachable)" }): $($sizeMap.Count) mods tracked, $onDisk server modslots on disk, $($st.doneCount)/$($sizeMap.Count) mods complete"
+}
+
 # per-run token: the six state-changing endpoints only answer requests that carry
 # it, so another website open in the browser cannot drive this server (CSRF)
 $token = [guid]::NewGuid().ToString('N')
-$mutating = '/start','/pause','/verify','/queue-server','/resume-batch','/make-preset','/add-server'
+$mutating = '/start','/pause','/verify','/queue-server','/resume-batch','/make-preset','/add-server','/refresh-servers'
 
 $html = @'
 <!doctype html><html><head><meta charset="utf-8"><title>Reforger Mods Download</title>
@@ -379,7 +428,7 @@ $html = @'
  h1{font-size:18px;margin:0 0 12px;color:#fff}
  .dot{display:inline-block;width:10px;height:10px;border-radius:5px;margin-right:6px}
  .bar{background:#2a2d34;border-radius:6px;height:14px;overflow:hidden}
- .bar>div{height:14px;background:#4cc35e}
+ .bar>div{height:14px;background:#4cc35e;transition:width .5s linear}
  .bar.amber>div{background:#e0b13e}
  .row{display:flex;justify-content:space-between;margin:6px 0 4px;font-size:13px}
  button{background:#3b6fe0;border:0;color:#fff;padding:9px 18px;border-radius:7px;font-size:14px;cursor:pointer;margin-right:8px}
@@ -407,13 +456,14 @@ $html = @'
   <button id="bverify" class="amber" onclick="act('verify')">Verify mods</button>
  </div>
  <div id="vres" class="card" style="margin:14px 0 0;padding:10px 14px"></div>
+ <div id="say" class="dim" style="margin-top:10px;font-size:13px;min-height:18px"></div>
 </div>
 <div class="card" id="actcard" style="display:none"><h2 style="font-size:15px;margin:0 0 8px;color:#fff">Downloading now</h2><div id="act"></div></div>
 <div class="card"><h2 style="font-size:15px;margin:0 0 8px;color:#fff">Server browser <span class="dim">live</span></h2>
  <div><input id="bq" placeholder="search servers (e.g. PVE, Cold Front, ArmaDudes)..." onkeydown="if(event.key==='Enter')browse()"><button onclick="browse()">Search</button></div>
  <div id="bs" class="dim" style="margin-top:8px">type something and hit Search to list live servers</div>
 </div>
-<div class="card"><h2 style="font-size:15px;margin:0 0 4px;color:#fff">Servers <span id="srvcount" class="dim"></span></h2><div id="srv" class="dim">loading server lists...</div></div>
+<div class="card"><h2 style="font-size:15px;margin:0 0 4px;color:#fff">Servers <span id="srvcount" class="dim"></span><button class="mini" onclick="refreshSrv(event)" title="re-read disk + pull fresh modlists from reforgermods.net">Refresh all</button></h2><div id="srv" class="dim">loading server lists...</div></div>
 <div class="card"><h2 style="font-size:15px;margin:0 0 4px;color:#fff">Completed <span id="reccount" class="dim"></span></h2><ul id="rec"></ul></div>
 <script>
 let T='__T__';   // refreshed from /status so an open page survives dashboard restarts
@@ -467,10 +517,12 @@ async function loadBS(id,d){
    j.mods.map(m=>'<li>'+(m.have?'<span class="ok">&#10003;</span>':'<span class="dim">&#8226;</span>')+' '+esc(m.name)+' <span class="dim">'+(m.expB>0?sz(m.expB):'')+'</span></li>').join('')+'</ul>';
  }catch(e){ box.innerHTML='<span class="bad">'+esc(String(e).replace('Error: ',''))+'</span>'; }
 }
+function say(t,ok){const e=document.getElementById('say'); if(!e)return; e.textContent=t||''; e.className=t?(ok===false?'bad':ok===true?'ok':'dim'):'dim';}
 async function addSrv(id,ev){
  ev.stopPropagation();
- const b=ev.target; b.disabled=true; b.textContent='...';
- if(confirm('Add this server? Its missing mods are queued at the END of the current download queue.'))await post('add-server?id='+id);
+ const b=ev.target; b.disabled=true; b.textContent='adding...';
+ say('adding server - its missing mods go to the end of the queue...');
+ await post('add-server?id='+id);
  b.disabled=false; b.textContent='Add server';
  loadSrv();
 }
@@ -523,25 +575,35 @@ async function post(w){
  try{
   const r=await fetch('/'+w+(w.indexOf('?')>=0?'&':'?')+'t='+T,{method:'POST'});
   const j=await r.json();
-  if(j.msg)alert(j.msg);
-  if(j.error)alert('failed: '+j.error);
+  if(j.error)say('failed: '+j.error,false);
+  else if(j.msg)say(String(j.msg),true);
   await tick();
- }catch(e){alert('failed: '+e); await tick();}
+ }catch(e){say('failed: '+e,false); await tick();}
 }
 async function queueSrv(id,ev){
  ev.stopPropagation();
- const b=ev.target; b.disabled=true; b.textContent='...';
+ const b=ev.target; b.disabled=true; b.textContent='queuing...';
+ say('reordering the queue...');
  await post('queue-server?id='+id);
  b.disabled=false; b.textContent='Queue first';
 }
 async function presetSrv(id,ev){
  ev.stopPropagation();
- const b=ev.target; b.disabled=true; b.textContent='...';
- if(confirm('Create an Arma Reforger launcher preset for this server? Installed mods only, and the game must be closed.'))await post('make-preset?id='+id);
+ const b=ev.target; b.disabled=true; b.textContent='building...';
+ say('building launcher preset...');
+ await post('make-preset?id='+id);
  b.disabled=false; b.textContent='Make preset';
+}
+async function refreshSrv(ev){
+ const b=ev.target; b.disabled=true; b.textContent='refreshing...';
+ say('refreshing servers: rescanning disk and pulling fresh modlists...');
+ await post('refresh-servers');
+ b.disabled=false; b.textContent='Refresh all';
+ loadSrv();
 }
 async function act(w){
  const b=event?event.target:null; if(b){b.disabled=true;b.textContent='...';}
+ say(w==='start'?'starting / resuming the download...':w==='pause'?'pausing...':'checking installed mods against the Workshop...');
  await post(w);
  if(b){b.disabled=false;b.textContent=w==='start'?'Start / Resume':w==='pause'?'Pause':'Verify mods';}
 }
@@ -641,6 +703,7 @@ while ($l.IsListening) {
       '/resume-batch' { $msg = Invoke-ResumeBatch; Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Green }
       '/make-preset'  { $msg = Invoke-MakePreset $ctx.Request.QueryString['id'];  Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Cyan }
       '/add-server'   { $msg = Invoke-AddServer $ctx.Request.QueryString['id'];   Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Green }
+      '/refresh-servers' { $msg = Invoke-RefreshServers; Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Cyan }
       default   { $msg = $null; $ctx.Response.StatusCode = 404 }
     }
     if ($msg) {

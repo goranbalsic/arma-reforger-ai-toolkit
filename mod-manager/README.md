@@ -21,6 +21,11 @@ not a running download.
   to see its full modlist with on-disk markers and exact sizes, **Add server**
   queues its missing mods at the END of the running batch (never jumps the
   queue) and restarts the downloader.
+- **Refresh all** (Servers card): rescans the disk and pulls a fresh modlist for
+  every tracked server. Counts become real; the batch itself (the size map) is
+  not changed.
+- Every action runs silently and reports in the status line under the buttons:
+  no browser prompts.
 - **Servers**: every tracked server with per-mod ✓/⟳/• status, sizes, per-server
   **Queue first** (reorders missing mods to the front, batch continues behind)
   and **Make preset** (builds an in-game launcher preset; game must be closed).
