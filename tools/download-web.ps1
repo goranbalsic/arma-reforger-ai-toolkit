@@ -36,6 +36,16 @@ function Get-Log {
 }
 
 $script:dirCache = $null; $script:dirCacheAt = (Get-Date).AddMinutes(-10)
+$script:clCache = @(); $script:clCacheAt = (Get-Date).AddMinutes(-10)
+
+function Get-ClientIds {
+  # mod ids present in the client addons folder (installed before/outside this batch)
+  if (((Get-Date) - $script:clCacheAt).TotalSeconds -lt 5) { return $script:clCache }
+  $ids = @(Get-ChildItem "$env:USERPROFILE\Documents\My Games\ArmaReforger\addons" -Directory -ErrorAction SilentlyContinue |
+    ForEach-Object { if ($_.Name -match '_([0-9A-F]{16})$') { $Matches[1] } })
+  $script:clCache = $ids; $script:clCacheAt = Get-Date
+  $ids
+}
 
 function Get-DirMap {
   # one recursive pass, grouped by folder - far faster than per-folder listings
@@ -106,7 +116,7 @@ function Get-Status {
      doneB = [double]$doneBytes; totalB = [double]$TotalBytes
      pct = [Math]::Min(100, [int](100 * $doneBytes / $TotalBytes))
      doneCount = $doneCount; totalMods = $sizeMap.Count
-     active = @($active); recent = @($recent); verify = $verify }
+     active = @($active); recent = @($recent); cl = (Get-ClientIds); verify = $verify }
 }
 
 if ($Check) {
@@ -203,7 +213,7 @@ function renderSrv(D,A,B){
   return '<details><summary>'+esc(v.name)+' <span class="dim">'+done+' / '+v.mods.length+' downloaded</span></summary><ul>'+
    v.mods.map(m=>{
     const t=D[m.id]?'<span class="ok">&#10003;</span>':A[m.id]?'<span class="warn">&#10227;</span>':'<span class="dim">&#8226;</span>';
-    const s2=D[m.id]?sz(B[m.id]||0):(m.e>0?sz(m.e):'not queued');
+    const s2=B[m.id]!=null?sz(B[m.id]):(m.e>0?sz(m.e):'');
     return '<li>'+t+' '+esc(m.name)+' <span class="dim">'+s2+'</span></li>';
    }).join('')+'</ul></details>';
  }).join('');
@@ -230,6 +240,7 @@ async function tick(){
   const D={},A={},B={};
   s.recent.forEach(r=>{D[r.id]=1;B[r.id]=r.b});
   s.active.forEach(a=>{A[a.id]=1});
+  (s.cl||[]).forEach(id=>{D[id]=1});   // installed client-side before the batch counts as on disk
   const key=s.recent.length+'|'+s.active.map(a=>a.id).join(',');
   if(key!==lastKey){          // lists only re-render when something actually finished/started
    lastKey=key;
