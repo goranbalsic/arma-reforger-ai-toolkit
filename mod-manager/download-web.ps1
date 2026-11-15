@@ -454,6 +454,9 @@ $html = @'
  ul{list-style:none;margin:6px 0 0;padding:0;font-size:13px}
  li{padding:3px 0;border-bottom:1px solid #26282e}
  details{margin:2px 0} summary{cursor:pointer;font-size:13px;padding:3px 0;color:#fff}
+ details.card>summary{list-style:none}
+ details.card>summary::-webkit-details-marker{display:none}
+ details.card>summary h2{display:inline;margin:0}
  #srv ul,#bs ul{margin:4px 0 0 16px}
  #bs .bs{margin:4px 0 0 16px}
  .ok{color:#7ed07e} .warn{color:#e0b13e} .bad{color:#e06c6c} .dim{color:#8a8e98}
@@ -475,11 +478,11 @@ $html = @'
 </div>
 <div class="card" id="actcard" style="display:none"><h2 style="font-size:15px;margin:0 0 8px;color:#fff">Downloading now</h2><div id="act"></div></div>
 <div class="card"><h2 style="font-size:15px;margin:0 0 8px;color:#fff">Server browser <span class="dim">live</span></h2>
- <div><input id="bq" placeholder="search servers (e.g. PVE, Cold Front, Vietnam)..." onkeydown="if(event.key==='Enter')browse()"><button onclick="browse()">Search</button></div>
+ <div><input id="bq" placeholder="search servers (e.g. PVE, Cold Front, Vietnam)..." oninput="browseCleared()" onkeydown="if(event.key==='Enter')browse()"><button onclick="browse()">Search</button></div>
  <div id="bs" class="dim" style="margin-top:8px">type something and hit Search to list live servers</div>
 </div>
-<div class="card"><h2 style="font-size:15px;margin:0 0 4px;color:#fff">Servers <span id="srvcount" class="dim"></span><button class="mini" onclick="refreshSrv(event)" title="re-read disk + pull fresh modlists from reforgermods.net">Refresh all</button></h2><div id="srv" class="dim">loading server lists...</div></div>
-<div class="card"><h2 style="font-size:15px;margin:0 0 4px;color:#fff">Completed <span id="reccount" class="dim"></span></h2><ul id="rec"></ul></div>
+<details class="card" open><summary><h2 style="font-size:15px;color:#fff">Servers <span id="srvcount" class="dim"></span><button class="mini" onclick="refreshSrv(event)" title="re-read disk + pull fresh modlists from reforgermods.net">Refresh all</button></h2></summary><div id="srv" class="dim" style="margin-top:8px">loading server lists...</div></details>
+<details class="card"><summary><h2 style="font-size:15px;color:#fff">Completed <span id="reccount" class="dim"></span></h2></summary><ul id="rec"></ul></details>
 <script>
 let T='__T__';   // refreshed from /status so an open page survives dashboard restarts
 function esc(x){return String(x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
@@ -504,11 +507,17 @@ function renderSrv(D,A,B){
 async function browse(){
  const q=document.getElementById('bq').value.trim();
  const el=document.getElementById('bs');
+ if(!q){ BR=null; el.innerHTML='<span class="dim">type a server name and press Enter</span>'; return; }
  el.textContent='searching live servers...';
  try{
   const r=await (await fetch('/browse?q='+encodeURIComponent(q))).json();
   BR=r.servers; renderBrowse();
  }catch(e){ el.innerHTML='<span class="bad">search failed: '+esc(String(e))+'</span>'; }
+}
+function browseCleared(){
+ if(document.getElementById('bq').value.trim())return;
+ BR=null;
+ document.getElementById('bs').innerHTML='<span class="dim">type a server name and press Enter</span>';
 }
 function renderBrowse(){
  const el=document.getElementById('bs');
@@ -610,6 +619,7 @@ async function presetSrv(id,ev){
  b.disabled=false; b.textContent='Make preset';
 }
 async function refreshSrv(ev){
+ ev.stopPropagation();   // the button sits inside the card's <summary>
  const b=ev.target; b.disabled=true; b.textContent='refreshing...';
  say('refreshing servers: rescanning disk and pulling fresh modlists...');
  await post('refresh-servers');
