@@ -52,6 +52,7 @@ account, no publishing.
 | --- | --- |
 | `download-web.ps1` | the program (dashboard, server browser, downloader control) |
 | `sync-addons.ps1` | copies finished mods into the game's addons folder |
+| `watchdog.ps1` | keeps the downloader alive: restarts it when it exits, kills it after a 3 minute stall, skips a mod the Workshop keeps refusing, honours Pause |
 | `make-preset.ps1` | builds a launcher preset (`-ServerId <guid>`) |
 | `trim-config.ps1` | removes already-downloaded mods from the DS config (automatic on every start) |
 | `add-server.ps1` | command-line variant of Add server (`-Id <guid>` or `-Search <text>`) |
