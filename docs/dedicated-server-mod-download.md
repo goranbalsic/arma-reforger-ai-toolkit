@@ -104,6 +104,34 @@ To grab the combined modlist of several servers at once (verified with a
 Rate limits: 60 req/min anonymous on read endpoints; `storage-plan` is a
 single POST per chunk and unaffected in practice.
 
+## Traps learned the hard way (batch of 600+ mods)
+
+- **1 MB download-list limit**: at startup the DS requests
+  `WorkshopApi/GetDownloadListS2S` for every mod in its config. Past ~600 mods
+  the response body exceeds the DS's hard 1 MB cap
+  (`error response body larger than: 1048576` ->
+  `Failed to fetch addon details from workshop API!` ->
+  `Unable to initialize the game` -> instant exit). Fix: keep only mods *not
+  yet assembled* in the config — the DS skips done ones anyway, so trimming is
+  lossless. Re-trim before every restart of a long batch.
+- **Dependencies are auto-pulled**: the DS downloads required dependencies of
+  config mods even when they are not listed. Subtracting locally-installed
+  mods when building the config therefore does not fully avoid re-downloads —
+  some bandwidth goes to dependency version-sync. Unavoidable.
+- **Copying into the client addons folder**: `Copy-Item -Recurse -Force`
+  *merges* folders — copying a new version into a folder that holds an older
+  copy mixes the two. Use `robocopy src dst /MIR` per mod folder: exact
+  replica, removes stale files, idempotent.
+- **A folder is not "done" because the assembly files exist**: the DS writes
+  `addon.gproj`, `meta`, and `resourceDatabase.rdb` *before* downloading the
+  data paks. Treat a mod as complete only when the folder has stopped
+  changing (e.g. untouched for 2 minutes) and its byte size matches the
+  Workshop size (`/v2/mods/{id}` -> `size`, or `POST /v2/tools/storage-plan`).
+- **storage-plan gets flaky under heavy use**: after many calls it starts
+  returning non-exact entries. Chunk the desired list (<= 500 mods per call
+  across current+desired), and re-fetch any non-exact mods individually from
+  `/v2/mods/{id}` (throttle under the 60 req/min limit).
+
 ## Notes
 
 - In-game download speed ≈ server download speed (same backend); the win is
