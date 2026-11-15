@@ -42,6 +42,7 @@ $verify = $null   # last verify result shown on the page
 $script:maxDone = [double]0; $script:maxDoneTotal = [double]0   # high-water progress: the DS deletes temp files, so raw bytes dip
 $script:pausedByUser = $false                                   # explicit Pause flag for watchdog.ps1
 $script:skipped = @(); $script:skippedAt = (Get-Date).AddMinutes(-10)
+$script:rateSamples = @()                                      # rolling byte-rate for a live speed
 
 $ApiBase = 'https://api.reforgermods.net/v2'
 $ApiH = @{ 'User-Agent' = 'arma-reforger-ai-toolkit/1.0' }
@@ -73,7 +74,7 @@ function Get-ClientIds {
   # does not match the Workshop size is partial/outdated and must not mask a
   # re-download - otherwise a stale folder blocks the mod forever.
   # .NET enumeration: 85 ms for 757 folders (Get-ChildItem per folder took 1.4 s)
-  if (((Get-Date) - $script:clCacheAt).TotalSeconds -lt 20) { return $script:clCache }
+  if (((Get-Date) - $script:clCacheAt).TotalSeconds -lt 5) { return $script:clCache }
   $ids = @()
   $root = [IO.DirectoryInfo]::new("$env:USERPROFILE\Documents\My Games\ArmaReforger\addons")
   if ($root.Exists) {
@@ -106,7 +107,7 @@ function Get-DirMap {
   # one .NET enumeration pass, grouped by folder: 111 ms for 6k files where
   # Get-ChildItem -Recurse took 236 ms. mtime = the folder's newest file time:
   # the DS appends to preallocated chunks without touching directory times.
-  if (((Get-Date) - $script:dirCacheAt).TotalSeconds -lt 0.5) { return $script:dirCache }
+  if (((Get-Date) - $script:dirCacheAt).TotalSeconds -lt 0.25) { return $script:dirCache }
   $map = @{}
   $root = [IO.DirectoryInfo]::new($Addons)
   if ($root.Exists) {
@@ -159,6 +160,22 @@ function Get-GlobalSpeed {
 function Get-Status {
   $dirs = Get-DirMap
   $sp = Get-GlobalSpeed
+  # live rate from the bytes actually landing on disk: the DS's own log line
+  # appears once per mod (up to 30 s old). The DS writes in ~3 MB fragments, so a
+  # short window is mostly empty - average over 60 s to show real throughput.
+  $diskTotal = [double]0
+  foreach ($e in $dirs.Values) { $diskTotal += [double]$e.bytes }
+  $nowRate = Get-Date
+  $script:rateSamples = @(@($script:rateSamples) + @(, @{ t = $nowRate; b = $diskTotal }) |
+    Where-Object { ($nowRate - $_.t).TotalSeconds -le 60 })
+  $rate = 0
+  if ($script:rateSamples.Count -ge 2) {
+    $first = $script:rateSamples[0]; $last = $script:rateSamples[-1]
+    $dt = ($last.t - $first.t).TotalSeconds
+    if ($dt -ge 5) { $rate = [Math]::Round([Math]::Max(0, $last.b - $first.b) / $dt) }
+  }
+  if ($rate -gt 0) { $sp = @{ b = $rate; age = 0 } }
+  elseif ($sp.age -gt 20) { $sp = @{ b = 0; age = 999 } }   # no movement and an old log line = idle
   $clIds = Get-ClientIds
   $clSet = @{}
   foreach ($i in $clIds) { $clSet[$i] = $true }
@@ -507,6 +524,7 @@ $html = @'
 let T='__T__';   // refreshed from /status so an open page survives dashboard restarts
 function esc(x){return String(x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 function sz(b){return b>=1073741824?(b/1073741824).toFixed(b>=107374182400?2:3)+' GB':b>=1048576?(b/1048576).toFixed(1)+' MB':b>=1024?(b/1024).toFixed(1)+' KB':Math.round(b)+' B'}
+function left(sec){ if(!isFinite(sec)||sec<=0) return '--'; const h=Math.floor(sec/3600), m=Math.round((sec%3600)/60); return h>0?(h+'h '+m+'m'):(m+' min'); }
 let SRV=null,BR=null,lastKey='';
 async function loadSrv(){try{SRV=await (await fetch('/servers')).json();lastKey='';}catch(e){}}
 function renderSrv(D,A,B){
@@ -585,7 +603,7 @@ async function tick(){
     ?(s.speedB>0?sz(s.speedB)+'/s'+(s.speedAge>15?' ('+Math.round(s.speedAge)+' s ago)':''):'idle')
     :'paused';
   document.getElementById('cnt').textContent=s.doneCount+' / '+s.totalMods+' mods assembled';
-  const eta=(s.speedB>51200)?Math.round((s.totalB-s.doneB)/s.speedB/60)+' min left':'--';
+  const eta=(s.speedB>51200)?left((s.totalB-s.doneB)/s.speedB):'--';
   document.getElementById('etabox').textContent=eta;
   const ac=document.getElementById('actcard');
   if(s.active.length){ac.style.display='block';
@@ -655,7 +673,7 @@ async function act(w){
  if(b){b.disabled=false;b.textContent=w==='start'?'Start / Resume':w==='pause'?'Pause':'Verify mods';}
 }
 loadSrv();
-(async function loop(){ await tick(); setTimeout(loop,300); })();   // one request in flight, ~0.5 s cadence
+(async function loop(){ await tick(); setTimeout(loop,200); })();   // one request in flight, ~0.4 s cadence
 </script></body></html>
 '@
 
