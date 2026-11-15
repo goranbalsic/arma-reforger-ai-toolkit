@@ -44,6 +44,8 @@ $script:pausedByUser = $false                                   # explicit Pause
 $script:skipped = @(); $script:skippedAt = (Get-Date).AddMinutes(-10)
 $script:rateSamples = @()                                      # rolling byte-rate for a live speed
 $script:activeMax = @{}                                        # per-mod high-water progress
+$script:exactCache = @{}                                       # path -> exact package check
+$script:logCache = $null; $script:logCacheAt = (Get-Date).AddMinutes(-1)
 
 $ApiBase = 'https://api.reforgermods.net/v2'
 $ApiH = @{ 'User-Agent' = 'arma-reforger-ai-toolkit/1.0' }
@@ -62,20 +64,22 @@ function Get-SkippedNames {
 function Get-DS { Get-Process ArmaReforgerServer -ErrorAction SilentlyContinue }
 
 function Get-Log {
-  Get-ChildItem "$Profile\logs" -Recurse -Filter console.log -ErrorAction SilentlyContinue |
+  # newest console.log; cached 3 s because the DS is writing to disk while we scan
+  if ($script:logCache -and ((Get-Date) - $script:logCacheAt).TotalSeconds -lt 3) { return $script:logCache }
+  $script:logCache = Get-ChildItem "$Profile\logs" -Recurse -Filter console.log -ErrorAction SilentlyContinue |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
+  $script:logCacheAt = Get-Date
+  $script:logCache
 }
 
 $script:dirCache = $null; $script:dirCacheAt = (Get-Date).AddMinutes(-10)
 $script:clCache = @(); $script:clCacheAt = (Get-Date).AddMinutes(-10)
 
 function Get-ClientIds {
-  # mod ids COMPLETELY present in the client addons folder (installed before or
-  # outside this batch). Same size rule as everything else: a client copy that
-  # does not match the Workshop size is partial/outdated and must not mask a
-  # re-download - otherwise a stale folder blocks the mod forever.
-  # .NET enumeration: 85 ms for 757 folders (Get-ChildItem per folder took 1.4 s)
-  if (((Get-Date) - $script:clCacheAt).TotalSeconds -lt 5) { return $script:clCache }
+  # fast completeness scan for the live status (size rule, no meta parsing):
+  # the exact per-file check is used by Get-HaveIds / verify / resume instead.
+  # One recursive enumeration (~85 ms) - a per-folder loop costs 5x that.
+  if (((Get-Date) - $script:clCacheAt).TotalSeconds -lt 10) { return $script:clCache }
   $ids = @()
   $root = [IO.DirectoryInfo]::new("$env:USERPROFILE\Documents\My Games\ArmaReforger\addons")
   if ($root.Exists) {
@@ -86,17 +90,16 @@ function Get-ClientIds {
     }
     try {
       foreach ($f in $root.EnumerateFiles('*', [IO.SearchOption]::AllDirectories)) {
-        # first path segment = the mod folder: files inside temp\ still belong to it
         $rel = $f.FullName.Substring($baseLen); $cut = $rel.IndexOf('\')
         if ($cut -lt 0) { continue }
         $n = $rel.Substring(0, $cut)
         if ($sum.ContainsKey($n)) { $sum[$n] += $f.Length }
       }
-    } catch { }   # an unreadable folder must not take the dashboard down
+    } catch { }
     $ids = @(foreach ($n in $sum.Keys) {
       $id = [regex]::Match($n, '_([0-9A-F]{16})$').Groups[1].Value
       $sm = $sizeMap[$id]; $exp = if ($sm) { [double]$sm.bytes } else { 0 }
-      if (-not $exp) { $id; continue }   # unknown size: cannot judge, keep old rule
+      if (-not $exp) { $id; continue }
       if ([Math]::Abs($sum[$n] - $exp) -le [Math]::Max(2MB, 0.02 * $exp)) { $id }
     })
   }
@@ -104,11 +107,38 @@ function Get-ClientIds {
   $ids
 }
 
+function Test-AddonComplete([string]$Path, $Mtime) {
+  # Exact check against the addon's own meta: versions[0].package.files lists
+  # every file with its size, and the game itself uses it. Folder totals are a
+  # bad proxy (a 2 MB tolerance let partial small mods pass as installed).
+  $c = $script:exactCache[$Path]
+  if ($c -and $c.mtime -eq $Mtime) { return $c.ok }
+  $ok = $false
+  $metaPath = Join-Path $Path 'meta'
+  if (Test-Path $metaPath) {
+    try {
+      $j = Get-Content $metaPath -Raw -ErrorAction Stop | ConvertFrom-Json
+      $files = @(@($j.meta.versions)[0].package.files)
+      if ($files.Count -gt 0) {
+        $ok = $true
+        foreach ($f in $files) {
+          if (-not $f.name) { continue }
+          $p = Join-Path $Path $f.name
+          if (-not (Test-Path $p)) { $ok = $false; break }
+          if ((Get-Item $p).Length -ne [long]$f.size) { $ok = $false; break }
+        }
+      }
+    } catch { $ok = $false }
+  }
+  $script:exactCache[$Path] = @{ mtime = $Mtime; ok = $ok }
+  $ok
+}
+
 function Get-DirMap {
   # one .NET enumeration pass, grouped by folder: 111 ms for 6k files where
   # Get-ChildItem -Recurse took 236 ms. mtime = the folder's newest file time:
   # the DS appends to preallocated chunks without touching directory times.
-  if (((Get-Date) - $script:dirCacheAt).TotalSeconds -lt 0.25) { return $script:dirCache }
+  if (((Get-Date) - $script:dirCacheAt).TotalSeconds -lt 0.5) { return $script:dirCache }
   $map = @{}
   $root = [IO.DirectoryInfo]::new($Addons)
   if ($root.Exists) {
@@ -127,7 +157,8 @@ function Get-DirMap {
         $e = $map[$g]
         if (-not $e) {
           $e = $map[$g] = @{ name = $dir -replace '_[0-9A-F]{16}$', ''; bytes = [double]0
-                             assembled = 0; mtime = $f.LastWriteTime }
+                             assembled = 0; mtime = $f.LastWriteTime
+                             path = (Join-Path $Addons $dir) }
         }
         $e.bytes += $f.Length
         if ($f.LastWriteTime -gt $e.mtime) { $e.mtime = $f.LastWriteTime }
@@ -310,7 +341,7 @@ function Invoke-Verify {
   foreach ($id in $sizeMap.Keys) {
     $sm = $sizeMap[$id]; $exp = [double]$sm.bytes
     $d = $dirs[$id]
-    $dsOk = $d -and (-not $exp -or [Math]::Abs($d.bytes - $exp) -le [Math]::Max(2MB, 0.02 * $exp))
+    $dsOk = $d -and (Test-AddonComplete $d.path $d.mtime)
     if ($dsOk -or $clSet.ContainsKey($id)) { $ok++; continue }   # installed somewhere is installed
     if (-not $d) { $pending++; continue }
     $partial++
@@ -329,13 +360,16 @@ function Get-HaveIds {
   # or present in the client addons folder
   $have = @{}
   foreach ($e in (Get-DirMap).GetEnumerator()) {
-    $sm = $sizeMap[$e.Key]; $exp = if ($sm) { [double]$sm.bytes } else { 0 }
-    if ($exp) {
-      # size is authoritative: some mods legitimately ship without addon.gproj
-      if ([Math]::Abs($e.Value.bytes - $exp) -le [Math]::Max(2MB, 0.02 * $exp)) { $have[$e.Key] = $true }
-    } elseif ($e.Value.assembled) { $have[$e.Key] = $true }
+    if (Test-AddonComplete $e.Value.path $e.Value.mtime) { $have[$e.Key] = $true }
   }
-  foreach ($id in (Get-ClientIds)) { $have[$id] = $true }
+  # client copies: same exact check (the launcher reads that folder)
+  $croot = [IO.DirectoryInfo]::new("$env:USERPROFILE\Documents\My Games\ArmaReforger\addons")
+  if ($croot.Exists) {
+    foreach ($d in $croot.EnumerateDirectories()) {
+      if ($d.Name -notmatch '_([0-9A-F]{16})$') { continue }
+      if (Test-AddonComplete $d.FullName $d.LastWriteTime) { $have[$Matches[1]] = $true }
+    }
+  }
   $have
 }
 
@@ -546,7 +580,7 @@ $html = @'
 <!doctype html><html><head><meta charset="utf-8"><title>Reforger Mods Download</title>
 <style>
  body{background:#17181c;color:#d6d8de;font-family:Segoe UI,Arial,sans-serif;margin:0;padding:24px}
- .card{background:#1f2127;border-radius:10px;padding:16px 20px;margin:0 auto 14px;max-width:760px}
+ .card{background:#1f2127;border-radius:10px;padding:16px 20px;margin:0 auto 14px;max-width:920px}
  h1{font-size:18px;margin:0 0 12px;color:#fff}
  .dot{display:inline-block;width:10px;height:10px;border-radius:5px;margin-right:6px}
  .bar{background:#2a2d34;border-radius:6px;height:14px;overflow:hidden}
@@ -566,9 +600,16 @@ $html = @'
  details.card>summary h2{display:inline;margin:0}
  details.card>summary::before{content:'\25B8';display:inline-block;width:14px;color:#8a8e98}
  details.card[open]>summary::before{content:'\25BE'}
- .cols{display:flex;gap:14px;max-width:760px;margin:0 auto 14px;align-items:flex-start}
+ .cols{display:flex;gap:14px;max-width:920px;margin:0 auto 14px;align-items:flex-start}
  .cols>.card{flex:1;margin:0;min-width:0}
+ #queue{max-height:300px;overflow:auto}
  #queue ol{margin:0;padding-left:22px;font-size:13px;line-height:1.6}
+ #srv{max-height:360px;overflow:auto}
+ #rec{max-height:360px;overflow:auto}
+ #act{max-height:340px;overflow:auto}
+ details.card>summary #qpreview{display:none}
+ details.card:not([open])>summary #qpreview{display:inline}
+ details.card:not([open])>summary{margin-bottom:0}
  #srv ul,#bs ul{margin:4px 0 0 16px}
  #bs .bs{margin:4px 0 0 16px}
  .ok{color:#7ed07e} .warn{color:#e0b13e} .bad{color:#e06c6c} .dim{color:#8a8e98}
@@ -592,7 +633,7 @@ $html = @'
  <div id="failed" class="bad" style="font-size:13px;margin-top:4px"></div>
 </div>
 <div class="cols">
- <details class="card" open><summary><h2 style="font-size:15px;color:#fff">Queue <span id="qcount" class="dim"></span></h2></summary><div id="queue" class="dim" style="margin-top:8px">-</div></details>
+ <details class="card" open><summary><h2 style="font-size:15px;color:#fff">Queue <span id="qcount" class="dim"></span> <span id="qpreview" class="dim" style="font-size:13px"></span></h2></summary><div id="queue" class="dim" style="margin-top:8px">-</div></details>
  <details class="card" open><summary><h2 style="font-size:15px;color:#fff">Downloading now <span id="actcount" class="dim"></span></h2></summary><div id="act" style="margin-top:8px"></div></details>
 </div>
 <details class="card" open><summary><h2 style="font-size:15px;color:#fff">Server browser <span class="dim">live</span></h2></summary>
@@ -612,7 +653,7 @@ function renderSrv(D,A,B){
  if(!SRV)return;
  document.getElementById('srvcount').textContent='('+SRV.servers.length+')';
  document.getElementById('srv').innerHTML=SRV.servers.map(v=>{
-  const done=v.mods.filter(m=>D[m.id]).length;
+  const done=v.haveCount!=null?v.haveCount:v.mods.filter(m=>D[m.id]).length;
   return '<details><summary>'+esc(v.name)+' <span class="dim">'+done+' / '+v.mods.length+' downloaded</span>'+
    '<button class="mini" onclick="queueSrv(\''+v.id+'\',event)">Queue first</button>'+
    '<button class="mini amber" onclick="presetSrv(\''+v.id+'\',event)">Make preset</button></summary><ul>'+
@@ -700,6 +741,8 @@ async function tick(){
   if(key!==lastKey){          // lists only re-render when something actually finished/started
    lastKey=key;
    document.getElementById('qcount').textContent='('+((s.queue||[]).length)+')';
+   const qp=document.getElementById('qpreview');
+   if(qp)qp.textContent=(s.queue||[]).length?(' - '+s.queue.slice(0,3).map(q=>q.name).join(' · ')+((s.queue.length>3)?' …':'')):'';
    document.getElementById('queue').innerHTML=(s.queue||[]).length
     ?'<ol>'+s.queue.map(q=>'<li>'+(A[q.id]?'<span class="warn">&#10227;</span> ':'')+esc(q.name)+'</li>').join('')+'</ol>'
     :'<span class="dim">queue is empty</span>';
@@ -812,7 +855,13 @@ while ($l.IsListening) {
         $ctx.Response.OutputStream.Write($b, 0, $b.Length)
       }
       '/servers' {
-        $b = [Text.Encoding]::UTF8.GetBytes((@{ servers = $serverList } | ConvertTo-Json -Depth 5 -Compress))
+        # exact per-server counts: a mod only counts when its own file list matches
+        $have = Get-HaveIds
+        $rows = @($serverList | ForEach-Object {
+          $s = $_
+          [PSCustomObject]@{ id = $s.id; name = $s.name; mods = $s.mods
+                             haveCount = @($s.mods | Where-Object { $have.ContainsKey($_.id) }).Count } })
+        $b = [Text.Encoding]::UTF8.GetBytes((@{ servers = $rows } | ConvertTo-Json -Depth 6 -Compress))
         $ctx.Response.ContentType = 'application/json'
         $ctx.Response.OutputStream.Write($b, 0, $b.Length)
       }
