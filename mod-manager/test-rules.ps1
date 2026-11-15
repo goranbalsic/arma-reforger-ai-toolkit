@@ -28,7 +28,9 @@ foreach ($r in $s.recent) {
 
 # folders with all 3 marker files but a size mismatch must NOT be treated as
 # done anywhere (Get-HaveIds rule) - they would otherwise never re-download
-$stuck = 0
+$queuedIds = @()
+$cj = Get-Content "$Data\batch1-serverconfig.json" -Raw | ConvertFrom-Json
+foreach ($m in $cj.game.mods) { $queuedIds += $m.modId }
 Get-ChildItem $ds -Directory -ErrorAction SilentlyContinue |
   Where-Object { $_.Name -match '_([0-9A-F]{16})$' } |
   ForEach-Object {
@@ -39,10 +41,14 @@ Get-ChildItem $ds -Directory -ErrorAction SilentlyContinue |
     $bytes = (Get-ChildItem $_.FullName -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
     if ([Math]::Abs($bytes - $exp) -gt [Math]::Max(2MB, 0.02 * $exp)) {
       if ($s.recent.id -contains $id) { "FAIL partial folder counted as completed: $($_.Name)"; $fail++ }
-      else { $stuck++ }
+      else {
+        # orphaned: partial but not queued -> trim-config would keep it out and
+        # nothing ever re-downloads it (the bug that stranded 3 AD2 mods)
+        $queued = $queuedIds -contains $id
+        if ($queued) { "note: partial folder on disk, queued for re-download: $($_.Name)" }
+        else { "FAIL partial folder NOT queued (orphaned): $($_.Name)"; $fail++ }
+      }
     }
   }
-if ($stuck) { "note: $stuck partial folder(s) on disk (not completed, will re-download)" }
-
 "checked $($s.recent.Count) completed mods, failures: $fail"
 if ($fail) { exit 1 } else { 'OK' }

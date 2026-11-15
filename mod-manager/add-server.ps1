@@ -33,12 +33,21 @@ $d = Invoke-RestMethod -Uri "$base/servers/$srvId" -Headers $h -TimeoutSec 60
 "server: $($d.server.name)  mods=$(@($d.server.mods).Count)"
 
 $j = Get-Content $cfgPath -Raw | ConvertFrom-Json
+$sizes = Get-Content $sizesPath -Raw | ConvertFrom-Json
+$sizeMap = @{}
+$sizes.mods.PSObject.Properties | ForEach-Object { $sizeMap[$_.Name] = [double]$_.Value.bytes }
 $have = @{}
 $j.game.mods | ForEach-Object { $have[$_.modId] = $true }
+# on disk only when the size matches: the DS writes the 3 marker files before
+# the data paks, so a folder alone can be a partial download
 foreach ($root in @($dsAddons, $clAddons)) {
   Get-ChildItem $root -Directory -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -match '_([0-9A-F]{16})$' } |
-    ForEach-Object { $have[$Matches[1]] = $true }
+    ForEach-Object {
+      $id = $Matches[1]; $exp = $sizeMap[$id]
+      $bytes = (Get-ChildItem $_.FullName -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
+      if (-not $exp -or [Math]::Abs($bytes - $exp) -le [Math]::Max(2MB, 0.02 * $exp)) { $have[$id] = $true }
+    }
 }
 $new = @($d.server.mods | Where-Object { -not $have.ContainsKey($_.id) })
 "covered: $(@($d.server.mods).Count - $new.Count)   new to download: $($new.Count)"
@@ -49,7 +58,6 @@ $j | ConvertTo-Json -Depth 5 | Set-Content $cfgPath -Encoding UTF8
 "config now: $(@($j.game.mods).Count) remaining mods"
 
 # real sizes straight from the server detail; zero placeholder when unknown
-$sizes = Get-Content $sizesPath -Raw | ConvertFrom-Json
 $added = 0
 foreach ($m in $new) {
   if (-not $sizes.mods.PSObject.Properties[$m.id]) {

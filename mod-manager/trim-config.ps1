@@ -8,13 +8,23 @@ $cfgPath = "$Data\batch1-serverconfig.json"
 $addons  = "$Root\serverprofile\addons"
 
 $done = @{}
+$sizes = @{}
+$sp = "$Data\batch1-sizes.json"
+if (Test-Path $sp) { foreach ($p in (Get-Content $sp -Raw | ConvertFrom-Json).mods.PSObject.Properties) { $sizes[$p.Name] = [double]$p.Value.bytes } }
+# same completion rule as Get-HaveIds: markers alone are NOT done - the DS
+# writes them before the paks, so a partial download looks assembled.
+# Marker-only folders with a known size would otherwise be trimmed out of the
+# config and never re-downloaded.
 Get-ChildItem $addons -Directory -ErrorAction SilentlyContinue |
   Where-Object { $_.Name -match '_([0-9A-F]{16})$' } |
   ForEach-Object {
     $files = Get-ChildItem $_.FullName -File -ErrorAction SilentlyContinue
-    if (($files | Where-Object { $_.Name -in 'addon.gproj','meta','resourceDatabase.rdb' }).Count -eq 3) {
-      $done[$Matches[1]] = $true
-    }
+    if (($files | Where-Object { $_.Name -in 'addon.gproj','meta','resourceDatabase.rdb' }).Count -ne 3) { return }
+    $id = $Matches[1]
+    $exp = if ($sizes[$id]) { $sizes[$id] } else { 0 }
+    if (-not $exp) { $done[$id] = $true; return }   # unknown size: keep old marker-only rule
+    $bytes = ($files | Measure-Object Length -Sum).Sum
+    if ([Math]::Abs($bytes - $exp) -le [Math]::Max(2MB, 0.02 * $exp)) { $done[$id] = $true }
   }
 "assembled on disk: $($done.Count)"
 

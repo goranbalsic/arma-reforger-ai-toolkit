@@ -40,6 +40,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%USERPROFILE%\Documents\Def
 '@ | Set-Content "$env:USERPROFILE\Desktop\Arma Reforger Mods Download.cmd" -Encoding ASCII
 'desktop .cmd rewritten'
 
-Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $repoCmd
+# -Command + quoted path: -File breaks when the repo path contains a space
+Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', "& '$repoCmd'"
 Start-Process 'http://localhost:8123/'
 "done - everything now lives in $mm; the old Documents\ArmaReforger-DL folder is scripts-free data residue and can be deleted"

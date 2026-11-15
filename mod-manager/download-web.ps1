@@ -50,10 +50,20 @@ $script:dirCache = $null; $script:dirCacheAt = (Get-Date).AddMinutes(-10)
 $script:clCache = @(); $script:clCacheAt = (Get-Date).AddMinutes(-10)
 
 function Get-ClientIds {
-  # mod ids present in the client addons folder (installed before/outside this batch)
+  # mod ids COMPLETELY present in the client addons folder (installed before or
+  # outside this batch). Same size rule as everything else: a client copy that
+  # does not match the Workshop size is partial/outdated and must not mask a
+  # re-download - otherwise a stale folder blocks the mod forever.
   if (((Get-Date) - $script:clCacheAt).TotalSeconds -lt 5) { return $script:clCache }
   $ids = @(Get-ChildItem "$env:USERPROFILE\Documents\My Games\ArmaReforger\addons" -Directory -ErrorAction SilentlyContinue |
-    ForEach-Object { if ($_.Name -match '_([0-9A-F]{16})$') { $Matches[1] } })
+    ForEach-Object {
+      if ($_.Name -notmatch '_([0-9A-F]{16})$') { return }
+      $id = $Matches[1]
+      $sm = $sizeMap[$id]; $exp = if ($sm) { [double]$sm.bytes } else { 0 }
+      if (-not $exp) { $id; return }   # unknown size: cannot judge, keep old rule
+      $bytes = (Get-ChildItem $_.FullName -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
+      if ([Math]::Abs($bytes - $exp) -le [Math]::Max(2MB, 0.02 * $exp)) { $id }
+    })
   $script:clCache = $ids; $script:clCacheAt = Get-Date
   $ids
 }
@@ -65,7 +75,7 @@ function Get-DirMap {
   Get-ChildItem $Addons -Recurse -File -ErrorAction SilentlyContinue |
     ForEach-Object {
       if ($_.Directory.Name -notmatch '_([0-9A-F]{16})$') { return }
-      if ($_.Directory.Name -match '^RHS-ContentPack0[12]_') { return }
+      if ($_.Directory.Name -match '^RHS-ContentPack0[12]_') { return }   # old pre-batch installs, not batch mods
       $g = $Matches[1]
       $e = $map[$g]
       if (-not $e) {
@@ -158,7 +168,9 @@ function Stop-DS {
   $p = Get-DS
   if (-not $p) { return 'not running' }
   $p | Stop-Process -Force
-  Start-Sleep 1
+  # wait for the process to actually die: a 1 s sleep can be too short, and
+  # Start-DS would then see the dying process and report "already running"
+  foreach ($i in 1..20) { if (-not (Get-DS)) { break }; Start-Sleep -Milliseconds 500 }
   'paused - progress kept'
 }
 
@@ -497,8 +509,10 @@ catch {
 }
 Write-Host '=== Arma Reforger Mods - web dashboard ===' -ForegroundColor White
 Write-Host "open: $Url   (keep this window open; closing it only stops the UI, not the download)" -ForegroundColor Cyan
+# -Command + quoted path: -File breaks on a repo path containing a space,
+# which silently disabled the client-addon mirror
 Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass',`
-  '-File',"$PSScriptRoot\sync-addons.ps1",'-Loop'   # auto-mirror completed mods into client addons
+  '-Command',"& '$PSScriptRoot\sync-addons.ps1' -Loop"   # auto-mirror completed mods into client addons
 Start-Process $Url
 
 while ($l.IsListening) {

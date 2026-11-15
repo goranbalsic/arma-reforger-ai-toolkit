@@ -6,14 +6,16 @@
 # included: the launcher deletes preset entries it cannot resolve, so uninstalled
 # workshop items would poison the whole preset on exit. Re-run when the batch
 # finishes to pick up the rest.
-param([string]$ServerId)
+param([string]$ServerId, [string]$ConfPath)
 $ErrorActionPreference = 'Stop'
 $Data = if ($env:RFMM_DATA) { $env:RFMM_DATA } else { Join-Path $PSScriptRoot 'data' }
 
-$conf = Get-ChildItem "$env:USERPROFILE\Documents\My Games\ArmaReforger\profile\.save" -Recurse -Filter ReforgerGameSettings.conf |
-  Select-Object -First 1
-if (-not $conf) { throw 'ReforgerGameSettings.conf not found' }
-$conf = $conf.FullName
+$conf = if ($ConfPath) { $ConfPath } else {
+  $f = Get-ChildItem "$env:USERPROFILE\Documents\My Games\ArmaReforger\profile\.save" -Recurse -Filter ReforgerGameSettings.conf |
+    Select-Object -First 1
+  if (-not $f) { throw 'ReforgerGameSettings.conf not found' }
+  $f.FullName
+}
 $srvs = Get-Content "$Data\batch1-servers.json" -Raw | ConvertFrom-Json
 $clAddons = "$env:USERPROFILE\Documents\My Games\ArmaReforger\addons"
 
@@ -21,12 +23,16 @@ if (Get-Process ArmaReforgerSteam -ErrorAction SilentlyContinue) { throw 'Game i
 
 $text = [IO.File]::ReadAllText($conf)
 
-# the preset storage starts at m_iVersion 1; duplicate names are only checked
-# inside it (an m_sName elsewhere in the conf must not block a new preset)
+# the preset storage is the LAST m_iVersion 1 in the conf (other blocks have
+# their own) - anchor on the storage declaration itself, never on the version
+# line alone: inserting near the top gets the preset dropped by the game
+$sIdx = $text.IndexOf('SCR_WorkshopAddonManagerPresetStorage')
+if ($sIdx -lt 0) { throw 'preset storage block not found in conf' }
+$i = $text.IndexOf('m_iVersion 1', $sIdx)
+if ($i -lt 0) { throw 'preset storage m_iVersion not found in conf' }
 $anchor = 'm_iVersion 1'
-$i = $text.IndexOf($anchor)
-if ($i -lt 0) { throw 'preset storage block not found in conf' }
-$storage = $text.Substring($i)
+$storage = $text.Substring($sIdx)
+$presetsBefore = ([regex]::Matches($storage, 'SCR_WorkshopAddonPreset "\{[0-9A-F]{16}\}"')).Count
 
 $srv = if ($ServerId) { @($srvs.servers | Where-Object { $_.id -eq $ServerId })[0] }
        else { @($srvs.servers | Where-Object { $_.name -match 'ArmaDudes 1\b' })[0] }
@@ -75,7 +81,7 @@ $body = '  SCR_WorkshopAddonPreset "{' + $presetGuid + '}" {' + "`r`n" +
 $check = [IO.File]::ReadAllText($conf)
 $open = ([regex]::Matches($check, '\{')).Count
 $close = ([regex]::Matches($check, '\}')).Count
-$presets = [regex]::Matches($check, 'SCR_WorkshopAddonPreset "\{[0-9A-F]{16}\}"').Count
-"verification: presets=$presets meta=$($mods.Count) braces=$open/$close"
-if ($presets -ne 1 -or $open -ne $close) { throw 'verification failed - restore from the .bak next to the conf' }
+$presets = ([regex]::Matches($check.Substring($check.IndexOf('SCR_WorkshopAddonManagerPresetStorage')), 'SCR_WorkshopAddonPreset "\{[0-9A-F]{16}\}"')).Count
+"verification: presets=$presets (expected $($presetsBefore + 1)) meta=$($mods.Count) braces=$open/$close"
+if ($presets -ne $presetsBefore + 1 -or $open -ne $close) { throw 'verification failed - restore from the .bak next to the conf' }
 "OK - preset '$presetName' with $($mods.Count) installed mods"

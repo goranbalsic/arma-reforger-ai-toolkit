@@ -25,7 +25,13 @@ if (-not $Loop) { if (Sync-Completed) { exit 0 } else { Write-Host 'dashboard no
 $mutex = [System.Threading.Mutex]::new($false, 'ReforgerSyncLoop')
 if (-not $mutex.WaitOne(0)) { exit 0 }
 
+$miss = 0
 while ($true) {
-  if (-not (Sync-Completed)) { exit 0 }   # dashboard gone -> loop dies with it
+  if (Sync-Completed) { $miss = 0 }
+  else {
+    # a single failed /status fetch must not silently stop the mirror forever
+    $miss++
+    if ($miss -ge 3) { exit 0 }   # dashboard gone -> loop dies with it
+  }
   Start-Sleep 60
 }
