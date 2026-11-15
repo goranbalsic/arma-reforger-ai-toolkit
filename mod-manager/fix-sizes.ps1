@@ -1,7 +1,8 @@
 # Fill in non-exact / zero sizes in batch1-sizes.json via /v2/mods/{id} (60 req/min).
 $ErrorActionPreference = 'Stop'
+$Data = if ($env:RFMM_DATA) { $env:RFMM_DATA } else { Join-Path $PSScriptRoot 'data' }
 $h = @{ 'User-Agent' = 'arma-reforger-ai-toolkit/1.0' }
-$p = "$env:USERPROFILE\Documents\Default Project\batch1-sizes.json"
+$p = "$Data\batch1-sizes.json"
 $j = Get-Content $p -Raw | ConvertFrom-Json
 $mods = $j.mods
 $need = @($mods.PSObject.Properties | Where-Object { -not $_.Value.exact -or -not $_.Value.bytes })

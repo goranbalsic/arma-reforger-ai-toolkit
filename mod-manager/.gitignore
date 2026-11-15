@@ -1,0 +1,5 @@
+# runtime data (big, machine-local)
+serverprofile/
+armar-server/
+steamcmd/
+*.log

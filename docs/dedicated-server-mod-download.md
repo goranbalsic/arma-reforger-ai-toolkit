@@ -125,7 +125,7 @@ single POST per chunk and unaffected in practice.
 - **Preset blocks belong inside `SCR_WorkshopAddonManagerPresetStorage`**, and
   GUIDs are quoted (`SCR_WorkshopAddonPreset "{GUID}" {`). A preset block
   appended after the storage block, or with bare-brace GUIDs, gets dropped by
-  the game on its next save. `tools/make-preset.ps1` inserts correctly,
+  the game on its next save. `mod-manager/make-preset.ps1` inserts correctly,
   includes only locally installed mods (unresolvable entries poison the
   preset), and verifies braces + counts.
 - **`Start-Process` liveness checks lie**: the DS crash on an oversized

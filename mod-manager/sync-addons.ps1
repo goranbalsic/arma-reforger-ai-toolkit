@@ -3,7 +3,8 @@
 # completion rule (assembled + quiet + size match) - this script never guesses.
 param([switch]$Loop)
 
-$src = "$PSScriptRoot\serverprofile\addons"
+$Root = if ($env:RFMM_HOME) { $env:RFMM_HOME } else { $PSScriptRoot }
+$src = "$Root\serverprofile\addons"
 $dst = "$env:USERPROFILE\Documents\My Games\ArmaReforger\addons"
 $Url = 'http://localhost:8123/status'
 

@@ -2,8 +2,10 @@
 # the DS fetches a download list for every config mod, and its 1 MB response
 # limit chokes once the list gets big - so the config must only hold what's left.
 $ErrorActionPreference = 'Stop'
-$cfgPath = "$env:USERPROFILE\Documents\Default Project\batch1-serverconfig.json"
-$addons  = "$PSScriptRoot\serverprofile\addons"
+$Root = if ($env:RFMM_HOME) { $env:RFMM_HOME } else { $PSScriptRoot }
+$Data = if ($env:RFMM_DATA) { $env:RFMM_DATA } else { Join-Path $PSScriptRoot 'data' }
+$cfgPath = "$Data\batch1-serverconfig.json"
+$addons  = "$Root\serverprofile\addons"
 
 $done = @{}
 Get-ChildItem $addons -Directory -ErrorAction SilentlyContinue |
@@ -16,10 +18,10 @@ Get-ChildItem $addons -Directory -ErrorAction SilentlyContinue |
   }
 "assembled on disk: $($done.Count)"
 
-$cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
-$left = @($cfg.game.mods | Where-Object { -not $done.ContainsKey($_.modId) })
-"config: $($cfg.game.mods.Count) -> remaining: $($left.Count)"
+$j = Get-Content $cfgPath -Raw | ConvertFrom-Json
+$left = @($j.game.mods | Where-Object { -not $done.ContainsKey($_.modId) })
+"config: $(@($j.game.mods).Count) -> remaining: $($left.Count)"
 
-$cfg.game.mods = $left
-$cfg | ConvertTo-Json -Depth 5 | Set-Content $cfgPath -Encoding UTF8
+$j.game.mods = $left
+$j | ConvertTo-Json -Depth 5 | Set-Content $cfgPath -Encoding UTF8
 "saved"

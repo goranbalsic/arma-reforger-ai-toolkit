@@ -117,3 +117,6 @@ or enabling mods.
 - `reference/mcp-tools.md` - the MCP tool surface, grouped by task.
 - `reference/presets.md` - preset file format, load order, dependency traps.
 - `reference/recipes.md` - worked end-to-end workflows.
+- `reference/reforgermods-api.md` - full offline copy of the reforgermods.net
+  API (mod + server data, exact Workshop sizes, dependency analysis, storage
+  planning). Use it instead of re-probing the API.

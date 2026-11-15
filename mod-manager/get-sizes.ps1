@@ -2,12 +2,13 @@
 # batch1-sizes.json. Merge, never replace: the config is trimmed to un-downloaded
 # mods, so replacing would destroy the sizes of everything already downloaded.
 $ErrorActionPreference = 'Stop'
+$Data = if ($env:RFMM_DATA) { $env:RFMM_DATA } else { Join-Path $PSScriptRoot 'data' }
 $h = @{ 'User-Agent' = 'arma-reforger-ai-toolkit/1.0' }
-$cfg = Get-Content "$env:USERPROFILE\Documents\Default Project\batch1-serverconfig.json" -Raw | ConvertFrom-Json
-$mods = @($cfg.game.mods | ForEach-Object { @{ id = $_.modId; name = $_.name } })
+$j = Get-Content "$Data\batch1-serverconfig.json" -Raw | ConvertFrom-Json
+$mods = @($j.game.mods | ForEach-Object { @{ id = $_.modId; name = $_.name } })
 "mods in config: $($mods.Count)"
 
-$outPath = "$env:USERPROFILE\Documents\Default Project\batch1-sizes.json"
+$outPath = "$Data\batch1-sizes.json"
 $all = @{}
 if (Test-Path $outPath) {
   foreach ($p in (Get-Content $outPath -Raw | ConvertFrom-Json).mods.PSObject.Properties) { $all[$p.Name] = $p.Value }

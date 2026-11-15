@@ -1,0 +1,597 @@
+﻿{
+    "game":  {
+                 "maxPlayers":  1,
+                 "name":  "ModGrabber",
+                 "scenarioId":  "{ECC61978EDCC2B5A}Missions/23_Campaign.conf",
+                 "mods":  [
+                              {
+                                  "modId":  "6614B4EBC1A63458",
+                                  "name":  "ARMA-RY CORE"
+                              },
+                              {
+                                  "modId":  "6614B9D9C6D7D565",
+                                  "name":  "ARMA-RY G3 BATTLE RIFLES"
+                              },
+                              {
+                                  "modId":  "6614BD0AC038E724",
+                                  "name":  "ARMA-RY G3 SPECIAL RIFLES"
+                              },
+                              {
+                                  "modId":  "6614BC5EC4E1675B",
+                                  "name":  "ARMA-RY CLAW MOUNT"
+                              },
+                              {
+                                  "modId":  "6614BD8AC622B696",
+                                  "name":  "ARMA-RY G3 MODERNISED"
+                              },
+                              {
+                                  "modId":  "60C4CE4888FF4621",
+                                  "name":  "ACE Core"
+                              },
+                              {
+                                  "modId":  "60EAEA0389DB3CC2",
+                                  "name":  "ACE Trenches"
+                              },
+                              {
+                                  "modId":  "5EB744C5F42E0800",
+                                  "name":  "ACE Chopping"
+                              },
+                              {
+                                  "modId":  "61226BB18D360BDD",
+                                  "name":  "ACE Tactical Ladder"
+                              },
+                              {
+                                  "name":  "ACE Backblast Dev",
+                                  "modId":  "65AD7C139EB4C1A1"
+                              },
+                              {
+                                  "name":  "ACE Compass Dev",
+                                  "modId":  "65AD7CF69FAF1FDD"
+                              },
+                              {
+                                  "name":  "ACE Cook-Off Dev",
+                                  "modId":  "664AFDC993C9CE1A"
+                              },
+                              {
+                                  "name":  "Ace Dev Chromatic Pain",
+                                  "modId":  "699B578D1C40653F"
+                              },
+                              {
+                                  "name":  "ACE Dev Demand Surrender",
+                                  "modId":  "688F21E01C00D8BC"
+                              },
+                              {
+                                  "name":  "ACE Explosives Dev",
+                                  "modId":  "65AD7D1E9EEAFA53"
+                              },
+                              {
+                                  "name":  "ACE Facepaint Dev",
+                                  "modId":  "68EAA4B96976D557"
+                              },
+                              {
+                                  "name":  "ACE Finger Dev",
+                                  "modId":  "65AD7D2E9866FA6E"
+                              },
+                              {
+                                  "name":  "ACE Magazine Repack Dev",
+                                  "modId":  "65AD7D4099944EBD"
+                              },
+                              {
+                                  "name":  "ACE Medical AI Dev",
+                                  "modId":  "6A1AF6DD9938A580"
+                              },
+                              {
+                                  "name":  "ACE Medical Breathing Dev",
+                                  "modId":  "671F73D99978B4F2"
+                              },
+                              {
+                                  "name":  "ACE Medical Circulation Dev",
+                                  "modId":  "65AD7D4F994EA327"
+                              },
+                              {
+                                  "name":  "ACE Medical Core Dev",
+                                  "modId":  "6586079789278413"
+                              },
+                              {
+                                  "name":  "ACE Medical Hitzones Dev",
+                                  "modId":  "65B343F799FB521B"
+                              },
+                              {
+                                  "name":  "ACE Radio Dev",
+                                  "modId":  "65AD7C75826B46C6"
+                              },
+                              {
+                                  "name":  "ACE Scopes Dev",
+                                  "modId":  "68FC0EDE9F677A3C"
+                              },
+                              {
+                                  "name":  "ACE Weather Dev",
+                                  "modId":  "667B230F9505C8BA"
+                              },
+                              {
+                                  "name":  "ACE_Carrying_Drag",
+                                  "modId":  "6A3CA05DC7E1A327"
+                              },
+                              {
+                                  "name":  "ACM CORE",
+                                  "modId":  "69D49458A9200D9C"
+                              },
+                              {
+                                  "name":  "ACM Flight CORE",
+                                  "modId":  "6A391ACE98228BA0"
+                              },
+                              {
+                                  "name":  "ACM HH-60W Jolly Green II",
+                                  "modId":  "6A6D7BC482790A79"
+                              },
+                              {
+                                  "name":  "ACM MH-47G Chinook",
+                                  "modId":  "6AB36D3A8965C7DC"
+                              },
+                              {
+                                  "name":  "ACM Strike Package",
+                                  "modId":  "6A1502DE87DE7924"
+                              },
+                              {
+                                  "name":  "ACR",
+                                  "modId":  "69ED6116A7803446"
+                              },
+                              {
+                                  "name":  "AD247 PvE AI Helicopter Addon",
+                                  "modId":  "69D0E5E74EA4F104"
+                              },
+                              {
+                                  "name":  "AD247 PvE AI Helicopter Fix",
+                                  "modId":  "6A58ED950C5AD353"
+                              },
+                              {
+                                  "name":  "Additional FIA Vehicles",
+                                  "modId":  "6A22F33063C50060"
+                              },
+                              {
+                                  "name":  "Advanced AI Command",
+                                  "modId":  "69A404653EE3F3C4"
+                              },
+                              {
+                                  "name":  "Advanced AI command fix 1.8",
+                                  "modId":  "6A38BED6F181DE47"
+                              },
+                              {
+                                  "name":  "Advanced Zeroing System",
+                                  "modId":  "6738DB574AAA1CB4"
+                              },
+                              {
+                                  "name":  "AI Horny Mute",
+                                  "modId":  "6877455D094BA18C"
+                              },
+                              {
+                                  "name":  "AI Use Drones",
+                                  "modId":  "690D33EDCB46C4B9"
+                              },
+                              {
+                                  "name":  "Aiming Deadzone",
+                                  "modId":  "684608DD7C7E0DFB"
+                              },
+                              {
+                                  "name":  "AIPlaceholderDeleter",
+                                  "modId":  "66F22CC6A0B4F83B"
+                              },
+                              {
+                                  "name":  "AK-74M",
+                                  "modId":  "65A936725A71733C"
+                              },
+                              {
+                                  "name":  "All Arsenal Items To Private",
+                                  "modId":  "66C751946DC58A1A"
+                              },
+                              {
+                                  "name":  "Anizay",
+                                  "modId":  "6266DCA9193C705E"
+                              },
+                              {
+                                  "name":  "Anti Infantry Rockets",
+                                  "modId":  "65D07A1BE5E4DC3A"
+                              },
+                              {
+                                  "name":  "ARMA CONFLICT Vietnamese Comms",
+                                  "modId":  "6132E76FBB852892"
+                              },
+                              {
+                                  "name":  "ARMA Expanded - 40mm Grenades",
+                                  "modId":  "68D326F6EB945A14"
+                              },
+                              {
+                                  "name":  "ARMA-RY AK47 ASSAULT RIFLE",
+                                  "modId":  "669EFCE1C4C6C864"
+                              },
+                              {
+                                  "name":  "ARMA-RY AK74 ASSAULT RIFLE",
+                                  "modId":  "666ADD0DDD59F6E7"
+                              },
+                              {
+                                  "name":  "ARMA-RY DELTA 1911",
+                                  "modId":  "665B3E73D7215B29"
+                              },
+                              {
+                                  "name":  "ARMA-RY DELTA FORCE 1980",
+                                  "modId":  "668A9D14EE624EED"
+                              },
+                              {
+                                  "name":  "ARMA-RY FACTIONS USSR 83",
+                                  "modId":  "672735737D6B90E9"
+                              },
+                              {
+                                  "name":  "ARMA-RY FIA USE M1 HELMETS",
+                                  "modId":  "664EC373DAC3C4E5"
+                              },
+                              {
+                                  "name":  "ARMA-RY M1 HELMETS",
+                                  "modId":  "664928B1C3E554ED"
+                              },
+                              {
+                                  "name":  "ARMA-RY M14 Battle Rifle",
+                                  "modId":  "663525C5DFA68E7A"
+                              },
+                              {
+                                  "name":  "ARMA-RY M16 EARLY RIFLES",
+                                  "modId":  "66393237EC3C6FDB"
+                              },
+                              {
+                                  "name":  "ARMA-RY M1911A1 PISTOL",
+                                  "modId":  "665B1AF5996EB7AA"
+                              },
+                              {
+                                  "name":  "ARMA-RY M3A1 GREASE GUN",
+                                  "modId":  "66873087C05E787C"
+                              },
+                              {
+                                  "name":  "ARMA-RY M79 GRENADE LAUNCHER",
+                                  "modId":  "66731579C7075EB3"
+                              },
+                              {
+                                  "name":  "ARMA-RY NIGHT VISION",
+                                  "modId":  "663EEED7D9BCA814"
+                              },
+                              {
+                                  "name":  "ARMA-RY RETRO ATTACHMENTS",
+                                  "modId":  "66C4D6C8EA530745"
+                              },
+                              {
+                                  "name":  "ARMA-RY SOVIET EQUIPMENT",
+                                  "modId":  "671F3CDAC20CDDC1"
+                              },
+                              {
+                                  "name":  "ARMA-RY SOVIET OPTICS",
+                                  "modId":  "67153CD5DC771D42"
+                              },
+                              {
+                                  "name":  "ARMA-RY UZI",
+                                  "modId":  "668F458EC133AE50"
+                              },
+                              {
+                                  "name":  "ARMA-RY UZI Sound Change",
+                                  "modId":  "6A6328835C6D7BF0"
+                              },
+                              {
+                                  "name":  "Atmospheric Weather - The Fog",
+                                  "modId":  "657AE8B1CE7C99E2"
+                              },
+                              {
+                                  "name":  "Atmospheric Weather Mod",
+                                  "modId":  "64ED6553B8AF6B62"
+                              },
+                              {
+                                  "name":  "Attachment Framework",
+                                  "modId":  "645F08FA9E7CDEDE"
+                              },
+                              {
+                                  "name":  "Attachment Framework-Core",
+                                  "modId":  "687CD82F6E41D627"
+                              },
+                              {
+                                  "name":  "AUS_CORE",
+                                  "modId":  "6276E6E3CC97A22B"
+                              },
+                              {
+                                  "name":  "Auto Kill Last AI",
+                                  "modId":  "62784BC1C0AE5AB1"
+                              },
+                              {
+                                  "name":  "Auto toss single use launchers",
+                                  "modId":  "69F4B0735ECD2797"
+                              },
+                              {
+                                  "name":  "Aviators",
+                                  "modId":  "666F0AF0C78E588E"
+                              },
+                              {
+                                  "name":  "AWM - Summer Version",
+                                  "modId":  "68F352219EA04EC6"
+                              },
+                              {
+                                  "name":  "B.O.R.E",
+                                  "modId":  "6AB156B64322A34D"
+                              },
+                              {
+                                  "name":  "B59 - AR10",
+                                  "modId":  "69601094E34C9652"
+                              },
+                              {
+                                  "name":  "B59 - BravoCore",
+                                  "modId":  "68C89DDCDD0AC147"
+                              },
+                              {
+                                  "name":  "B59 - M416",
+                                  "modId":  "6A2744B7B34AB79A"
+                              },
+                              {
+                                  "name":  "B59 - SoundFX",
+                                  "modId":  "66E0B5D0C13D2C00"
+                              },
+                              {
+                                  "name":  "B59 Attachments",
+                                  "modId":  "65863EA3D8143FA6"
+                              },
+                              {
+                                  "name":  "Bacon Camera Shake",
+                                  "modId":  "65DC97E85035D7BE"
+                              },
+                              {
+                                  "name":  "Bakhmut City",
+                                  "modId":  "65F173E7EA1B5A98"
+                              },
+                              {
+                                  "name":  "Barrett M82",
+                                  "modId":  "5AC2954C784671B3"
+                              },
+                              {
+                                  "name":  "Barrett M82 Fix",
+                                  "modId":  "65E643427EB3B340"
+                              },
+                              {
+                                  "name":  "Belgian Forces",
+                                  "modId":  "6A66FB05D1C69396"
+                              },
+                              {
+                                  "name":  "Best Body Cam",
+                                  "modId":  "64FD308B60F7B687"
+                              },
+                              {
+                                  "name":  "Better map information",
+                                  "modId":  "69FE226294C781A5"
+                              },
+                              {
+                                  "name":  "Better Stamina",
+                                  "modId":  "669D02FA36538C3C"
+                              },
+                              {
+                                  "name":  "BetterInventory",
+                                  "modId":  "5DAC39D2C3D4C8CD"
+                              },
+                              {
+                                  "name":  "BF Scarves for US BDUs",
+                                  "modId":  "67291868711F6A37"
+                              },
+                              {
+                                  "name":  "BFS - Custom Player Names",
+                                  "modId":  "695CF766C1D378B4"
+                              },
+                              {
+                                  "name":  "BFS - Custom Player Names CSI",
+                                  "modId":  "695F3EBA39E5AC0F"
+                              },
+                              {
+                                  "name":  "BGONE",
+                                  "modId":  "5F1EE615E7AE3106"
+                              },
+                              {
+                                  "name":  "Blood and Gore MHGaming",
+                                  "modId":  "62D141C722831364"
+                              },
+                              {
+                                  "name":  "BM - Airframe Helmet",
+                                  "modId":  "66CEE634723A70D7"
+                              },
+                              {
+                                  "name":  "BM - Core",
+                                  "modId":  "6A2CF802755437E4"
+                              },
+                              {
+                                  "name":  "BM - ECH",
+                                  "modId":  "66CEE634723A70D6"
+                              },
+                              {
+                                  "name":  "Bmp2",
+                                  "modId":  "68B36B2B814F59CB"
+                              },
+                              {
+                                  "name":  "bobs CF mod configs",
+                                  "modId":  "6A5116B612AC8963"
+                              },
+                              {
+                                  "name":  "Bobs Warsaw Pact Stuff",
+                                  "modId":  "6A8E2CA45E5E1F60"
+                              },
+                              {
+                                  "name":  "Breachable Doors",
+                                  "modId":  "646B350F36C6D3E4"
+                              },
+                              {
+                                  "name":  "Brighter Vanilla Flashlights",
+                                  "modId":  "65F039F8321146E3"
+                              },
+                              {
+                                  "name":  "British Army Beret Pack",
+                                  "modId":  "690D01CBBF58A037"
+                              },
+                              {
+                                  "name":  "British Forces",
+                                  "modId":  "5AE50EC5B8D6F4AE"
+                              },
+                              {
+                                  "name":  "British Forces in US Arsenal",
+                                  "modId":  "61C93085D1BECD63"
+                              },
+                              {
+                                  "name":  "British Forces Scrim Fix",
+                                  "modId":  "6A833A055F2654C8"
+                              },
+                              {
+                                  "name":  "Brutal Voices",
+                                  "modId":  "6174A376E06661BF"
+                              },
+                              {
+                                  "name":  "BTR-82 Fix",
+                                  "modId":  "6A4F248C6F5AE202"
+                              },
+                              {
+                                  "name":  "BTR-82A modernized",
+                                  "modId":  "6A0F6CA096B00B20"
+                              },
+                              {
+                                  "name":  "Build With Enemies In Area",
+                                  "modId":  "692974613B096BD1"
+                              },
+                              {
+                                  "name":  "BUMSOS_WarTapes",
+                                  "modId":  "66ED4ACA2E84B4BB"
+                              },
+                              {
+                                  "name":  "BUSHWAR Ferret - BAOR",
+                                  "modId":  "6A8258DE1ECFC9E4"
+                              },
+                              {
+                                  "name":  "BUSHWAR Ferret Armored Car",
+                                  "modId":  "6A6A0D519E902C03"
+                              },
+                              {
+                                  "name":  "C7 Thermold Magazine",
+                                  "modId":  "6A88E7E5572F5982"
+                              },
+                              {
+                                  "name":  "Catch a Ride",
+                                  "modId":  "661B062B26BDB12F"
+                              },
+                              {
+                                  "name":  "CDD Darkline Weapon Pack",
+                                  "modId":  "66EA779D6A341108"
+                              },
+                              {
+                                  "name":  "CDD ELR Mod Pack",
+                                  "modId":  "69AD3AF3F20FE611"
+                              },
+                              {
+                                  "name":  "CDD Taps",
+                                  "modId":  "7AB50000000000AB"
+                              },
+                              {
+                                  "name":  "CDD_AudibleOverride",
+                                  "modId":  "6A94D023E992A5C9"
+                              },
+                              {
+                                  "name":  "CHAMPS_MASK",
+                                  "modId":  "69F7590401DBCB50"
+                              },
+                              {
+                                  "name":  "Champs_Woobies",
+                                  "modId":  "68E8ECB9089B48F9"
+                              },
+                              {
+                                  "name":  "Character Gear Randomizer",
+                                  "modId":  "68AAF2210A36FEF6"
+                              },
+                              {
+                                  "name":  "Charlies Inventory System",
+                                  "modId":  "66C4DE56E7742D6C"
+                              },
+                              {
+                                  "name":  "CharliesPAVNPack",
+                                  "modId":  "697B023959D55EDB"
+                              },
+                              {
+                                  "name":  "Chopped M60",
+                                  "modId":  "66F0FA1883386DCB"
+                              },
+                              {
+                                  "name":  "Chungus Launchers",
+                                  "modId":  "6190F1B505C08562"
+                              },
+                              {
+                                  "name":  "Chungus LMGs",
+                                  "modId":  "61344BDC155A5A28"
+                              },
+                              {
+                                  "name":  "Chungus Rifles",
+                                  "modId":  "62A711001B8FDEEA"
+                              },
+                              {
+                                  "name":  "Chungus Shotguns",
+                                  "modId":  "620E584B1D2C96A4"
+                              },
+                              {
+                                  "name":  "Chungus SMGs",
+                                  "modId":  "60E6F54E174C53C5"
+                              },
+                              {
+                                  "name":  "Phaseline - Modular Rifles",
+                                  "modId":  "E4D206B81482F59E"
+                              },
+                              {
+                                  "name":  "RJB BINOCULEAN",
+                                  "modId":  "A615B024CE7DFB4F"
+                              },
+                              {
+                                  "name":  "Zeliks Character",
+                                  "modId":  "5D0551624969C92E"
+                              },
+                              {
+                                  "modId":  "4FD4A1BD550793F4",
+                                  "name":  "Creature Melee AI"
+                              },
+                              {
+                                  "modId":  "F1D4B9B5245B36ED",
+                                  "name":  "Project Outbreak Zombies"
+                              },
+                              {
+                                  "modId":  "7B763100BAFA1F9A",
+                                  "name":  "Project Outbreak Infection"
+                              },
+                              {
+                                  "modId":  "297640FBAC0C46C3",
+                                  "name":  "Special Zombies and Creatures"
+                              },
+                              {
+                                  "modId":  "E1DCD3CAF138441C",
+                                  "name":  "Eyekin"
+                              },
+                              {
+                                  "modId":  "0751D781B4F6F9BB",
+                                  "name":  "Mushroom Rift"
+                              },
+                              {
+                                  "modId":  "9C6F9425B58142E7",
+                                  "name":  "Warbeasts"
+                              },
+                              {
+                                  "modId":  "A1C2ED1F87D04FF8",
+                                  "name":  "Grimdark Horde"
+                              },
+                              {
+                                  "modId":  "BED17EE9C834B7AA",
+                                  "name":  "The Golden Tower"
+                              },
+                              {
+                                  "modId":  "9F4C28E1B6D03A57",
+                                  "name":  "Project Outbreak Dead Gogland"
+                              },
+                              {
+                                  "modId":  "A3D7519E4B806C2F",
+                                  "name":  "Dead Gogland Creatures"
+                              }
+                          ]
+             },
+    "publicAddress":  "127.0.0.1",
+    "bindPort":  2001,
+    "bindAddress":  "127.0.0.1",
+    "publicPort":  2001
+}

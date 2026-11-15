@@ -16,7 +16,7 @@ but every piece works standalone from a terminal.
 | `skill/.../scripts/refpak.py` | Read, list, manifest, and extract `.pak` archives (Python 3, stdlib only) |
 | `skill/.../scripts/pack-addon.ps1` | Pack a project through Workbench and validate the result |
 | `tools/reforgermods-api.ps1` | Live Workshop metadata, dependencies, sizes, and server mod lists via the reforgermods.net V2 API (no key, 60 req/min) |
-| `tools/download-web.ps1` + `tools/sync-addons.ps1` | Web dashboard that drives the DS as a batch downloader and mirrors finished mods into the client addons folder (`robocopy /MIR`, auto-sync loop). Expects the `Documents\Default Project\batch1-*.json` batch files and a DS workdir like `reforger-dl/` |
+| `mod-manager/` | Standalone mod manager: web dashboard (batch downloader, live server browser, per-server queue-first, launcher presets) + client addon sync + state in `data\`. See its README. Full API reference offline copy: `skill\arma-reforger-modding\reference\reforgermods-api.md` |
 | `tools/build-index.py` | Index installed addons + launcher presets into a machine-readable inventory |
 | `tools/deploy-mod.ps1` | Install a packed addon and enable it at the end of a launcher preset |
 | `install.ps1` | Copy the skill into an agent's skill folder, or `-Check` the toolchain |

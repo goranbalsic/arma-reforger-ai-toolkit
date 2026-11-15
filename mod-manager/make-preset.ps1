@@ -8,17 +8,25 @@
 # finishes to pick up the rest.
 param([string]$ServerId)
 $ErrorActionPreference = 'Stop'
+$Data = if ($env:RFMM_DATA) { $env:RFMM_DATA } else { Join-Path $PSScriptRoot 'data' }
 
 $conf = Get-ChildItem "$env:USERPROFILE\Documents\My Games\ArmaReforger\profile\.save" -Recurse -Filter ReforgerGameSettings.conf |
   Select-Object -First 1
 if (-not $conf) { throw 'ReforgerGameSettings.conf not found' }
 $conf = $conf.FullName
-$srvs = Get-Content "$env:USERPROFILE\Documents\Default Project\batch1-servers.json" -Raw | ConvertFrom-Json
+$srvs = Get-Content "$Data\batch1-servers.json" -Raw | ConvertFrom-Json
 $clAddons = "$env:USERPROFILE\Documents\My Games\ArmaReforger\addons"
 
 if (Get-Process ArmaReforgerSteam -ErrorAction SilentlyContinue) { throw 'Game is running - close it first (it rewrites this file on exit)' }
 
 $text = [IO.File]::ReadAllText($conf)
+
+# the preset storage starts at m_iVersion 1; duplicate names are only checked
+# inside it (an m_sName elsewhere in the conf must not block a new preset)
+$anchor = 'm_iVersion 1'
+$i = $text.IndexOf($anchor)
+if ($i -lt 0) { throw 'preset storage block not found in conf' }
+$storage = $text.Substring($i)
 
 $srv = if ($ServerId) { @($srvs.servers | Where-Object { $_.id -eq $ServerId })[0] }
        else { @($srvs.servers | Where-Object { $_.name -match 'ArmaDudes 1\b' })[0] }
@@ -27,16 +35,16 @@ $presetName = if ($srv.PSObject.Properties['key'] -and $srv.key) { [string]$srv.
               else { ([string]$srv.name -split '\|')[0].Trim() }
 if ($presetName.Length -gt 60) { $presetName = $presetName.Substring(0, 60).Trim() }
 $presetName = $presetName -replace '"', "'"
-if ($text -match ('m_sName "' + [regex]::Escape($presetName) + '"')) { throw "preset '$presetName' already exists - delete it in the launcher first" }
+if ($storage -match ('m_sName "' + [regex]::Escape($presetName) + '"')) { throw "preset '$presetName' already exists - delete it in the launcher first" }
 
 $installed = @{}
 Get-ChildItem $clAddons -Directory |
   Where-Object { $_.Name -match '_([0-9A-F]{16})$' } |
   ForEach-Object { $installed[$Matches[1]] = ($_.Name -replace '_[0-9A-F]{16}$', '') }
 $mods = @($srv.mods | Where-Object { $installed.ContainsKey($_.id) })
-"server: $($srv.name)  mods=$($srv.mods.Count)  installed here: $($mods.Count)"
-if ($mods.Count -lt $srv.mods.Count) {
-  "note: $($srv.mods.Count - $mods.Count) mods not installed yet - re-run this after the batch finishes"
+"server: $($srv.name)  mods=$(@($srv.mods).Count)  installed here: $($mods.Count)"
+if ($mods.Count -lt @($srv.mods).Count) {
+  "note: $(@($srv.mods).Count - $mods.Count) mods not installed yet - re-run this after the batch finishes"
 }
 if (-not $mods) { throw 'no installed mods for this preset yet' }
 
@@ -62,9 +70,6 @@ $body = '  SCR_WorkshopAddonPreset "{' + $presetGuid + '}" {' + "`r`n" +
         '   }' + "`r`n" +
         '  }'
 
-$anchor = 'm_iVersion 1'
-$i = $text.IndexOf($anchor)
-if ($i -lt 0) { throw 'preset storage block not found in conf' }
 [IO.File]::WriteAllText($conf, $text.Insert($i + $anchor.Length, "`r`n" + $body), [Text.UTF8Encoding]::new($false))
 
 $check = [IO.File]::ReadAllText($conf)

@@ -1,13 +1,20 @@
 param([switch]$Check)
-# Arma Reforger batch download - local web dashboard.
-# double-click the Desktop .cmd: serves http://localhost:8123 and opens your browser.
-# buttons: Start/Resume, Pause, Verify mods (size-checks every assembled mod).
+# Arma Reforger mod manager - local web dashboard: batch downloader, live server
+# browser, per-server queue-first, launcher presets, client addon sync.
+# double-click the .cmd: serves http://localhost:8123 and opens your browser.
+#
+# Paths: everything is relative to this folder, so the project folder is portable.
+#   RFMM_HOME  where the big data lives (serverprofile\, airmar-server\, steamcmd\)
+#   RFMM_DATA  where the json state lives (data\)   [both optional; default = here]
+# On this machine they are set until migrate-here.ps1 moves the folders in here.
 $ErrorActionPreference = 'Stop'
-$W       = $PSScriptRoot
-$Exe     = "$W\armar-server\ArmaReforgerServer.exe"
-$Cfg     = "$env:USERPROFILE\Documents\Default Project\batch1-serverconfig.json"
-$Sizes   = "$env:USERPROFILE\Documents\Default Project\batch1-sizes.json"
-$Profile = "$W\serverprofile"
+$Root    = if ($env:RFMM_HOME) { $env:RFMM_HOME } else { $PSScriptRoot }
+$Data    = if ($env:RFMM_DATA) { $env:RFMM_DATA } else { Join-Path $PSScriptRoot 'data' }
+$Exe     = "$Root\armar-server\ArmaReforgerServer.exe"
+$Cfg     = "$Data\batch1-serverconfig.json"
+$Sizes   = "$Data\batch1-sizes.json"
+$ServersPath = "$Data\batch1-servers.json"
+$Profile = "$Root\serverprofile"
 $Addons  = "$Profile\addons"
 $Url     = 'http://localhost:8123/'
 
@@ -16,7 +23,6 @@ $sizeMap = @{}
 foreach ($p in $j.mods.PSObject.Properties) { $sizeMap[$p.Name] = $p.Value }
 $TotalBytes = $j.totalBytes
 
-$ServersPath = "$env:USERPROFILE\Documents\Default Project\batch1-servers.json"
 $serverList = @()
 if (Test-Path $ServersPath) {
   $serverList = @((Get-Content $ServersPath -Raw | ConvertFrom-Json).servers)
@@ -27,6 +33,11 @@ if (Test-Path $ServersPath) {
 }
 
 $verify = $null   # last verify result shown on the page
+
+$ApiBase = 'https://api.reforgermods.net/v2'
+$ApiH = @{ 'User-Agent' = 'arma-reforger-ai-toolkit/1.0' }
+$script:bCache = @{}; $script:bCacheAt = @{}   # /browse search cache
+$script:dCache = @{}; $script:dCacheAt = @{}   # /browse-server detail cache
 
 function Get-DS { Get-Process ArmaReforgerServer -ErrorAction SilentlyContinue }
 
@@ -133,7 +144,7 @@ function Start-DS {
   $dsArgs = "-config `"$Cfg`" -profile `"$Profile`""
   foreach ($try in 1, 2) {
     Start-Process -FilePath $Exe -ArgumentList $dsArgs `
-      -WorkingDirectory "$W\armar-server" -WindowStyle Hidden
+      -WorkingDirectory "$Root\armar-server" -WindowStyle Hidden
     Start-Sleep 25   # the DS either settles into downloading or dies within ~20 s
     if (Get-DS) { return 'started' }
   }
@@ -171,9 +182,17 @@ function Invoke-Verify {
 }
 
 function Get-HaveIds {
-  # on disk = assembled in the DS profile, or present in the client addons folder
+  # on disk = COMPLETED in the DS profile (same rule as Get-Status: assembled AND
+  # size matches - the DS writes the 3 marker files before the data paks, so a
+  # killed download would otherwise be treated as done and never re-fetched),
+  # or present in the client addons folder
   $have = @{}
-  foreach ($e in (Get-DirMap).GetEnumerator()) { if ($e.Value.assembled) { $have[$e.Key] = $true } }
+  foreach ($e in (Get-DirMap).GetEnumerator()) {
+    $sm = $sizeMap[$e.Key]; $exp = if ($sm) { [double]$sm.bytes } else { 0 }
+    if ($e.Value.assembled -and (-not $exp -or [Math]::Abs($e.Value.bytes - $exp) -le [Math]::Max(2MB, 0.02 * $exp))) {
+      $have[$e.Key] = $true
+    }
+  }
   foreach ($id in (Get-ClientIds)) { $have[$id] = $true }
   $have
 }
@@ -216,6 +235,74 @@ function Invoke-MakePreset([string]$Id) {
   ($out | Out-String).Trim()
 }
 
+function Get-Browse([string]$q) {
+  # live server list from the public reforgermods API, cached 15 s per query
+  $key = $q.ToLower()
+  if ($script:bCache[$key] -and ((Get-Date) - $script:bCacheAt[$key]).TotalSeconds -lt 15) { return $script:bCache[$key] }
+  $u = "$ApiBase/servers?includeOffline=true"
+  if ($q) { $u += "&search=$([uri]::EscapeDataString($q))" }
+  $r = Invoke-RestMethod -Uri $u -Headers $ApiH -TimeoutSec 30
+  $list = @($r.data | Sort-Object online, players -Descending |
+    Select-Object -First 60 | ForEach-Object {
+      [PSCustomObject]@{ id = $_.id; name = $_.name; players = $_.players; maxPlayers = $_.maxPlayers
+                         region = $_.region; online = [bool]$_.online; modCount = $_.modCount
+                         scenarioName = $_.scenarioName } })
+  $script:bCache[$key] = $list; $script:bCacheAt[$key] = Get-Date
+  $list
+}
+
+function Get-Detail([string]$Id) {
+  # one server with its full modlist (the API sends exact Workshop sizes), cached 30 s
+  if ($script:dCache[$Id] -and ((Get-Date) - $script:dCacheAt[$Id]).TotalSeconds -lt 30) { return $script:dCache[$Id] }
+  $d = Invoke-RestMethod -Uri "$ApiBase/servers/$Id" -Headers $ApiH -TimeoutSec 30
+  if (-not $d.server -or -not @($d.server.mods).Count) { throw 'server has no modlist (offline or password protected)' }
+  $script:dCache[$Id] = $d.server; $script:dCacheAt[$Id] = Get-Date
+  $d.server
+}
+
+function Invoke-AddServer([string]$Id) {
+  # add a server from the live browser: queue its missing mods at the END of the
+  # batch (adding must not jump the queue), with real sizes from the API
+  $s = Get-Detail $Id
+  if ($s.passwordProtected) { return 'server is password protected - its modlist is not public' }
+  $name = ([string]$s.name -split '\|')[0].Trim()
+  if ($name.Length -gt 60) { $name = $name.Substring(0, 60).Trim() }
+  $have = Get-HaveIds
+  foreach ($m in (Get-Content $Cfg -Raw | ConvertFrom-Json).game.mods) { $have[$m.modId] = $true }
+  $new = @($s.mods | Where-Object { -not $have.ContainsKey($_.id) })
+  if (-not $new) { return "nothing to add - all $(@($s.mods).Count) mods of '$name' are on disk or queued" }
+
+  $j = Get-Content $Cfg -Raw | ConvertFrom-Json
+  $j.game.mods = @($j.game.mods) + @($new | ForEach-Object { [PSCustomObject]@{ modId = $_.id; name = $_.name } })
+  $j | ConvertTo-Json -Depth 5 | Set-Content $Cfg -Encoding UTF8
+
+  # merge the real sizes into the sizes file (merge-only: never replace it)
+  $sz = Get-Content $Sizes -Raw | ConvertFrom-Json
+  foreach ($m in $new) {
+    if (-not $sizeMap.ContainsKey($m.id)) {
+      $sizeMap[$m.id] = @{ name = $m.name; bytes = [double]$m.size; exact = [bool]$m.sizeKnown }
+      $sz.mods | Add-Member -NotePropertyName $m.id -NotePropertyValue ([PSCustomObject]@{ name = $m.name; bytes = [double]$m.size; exact = [bool]$m.sizeKnown }) -Force
+    }
+  }
+  $script:TotalBytes = ($sizeMap.Values | ForEach-Object { [double]$_.bytes } | Measure-Object -Sum).Sum
+  $sz.totalBytes = [double]$script:TotalBytes
+  $sz | ConvertTo-Json -Depth 4 | Set-Content $Sizes -Encoding UTF8
+
+  # show the new server in the Servers card immediately
+  $script:serverList = @($serverList) + @([PSCustomObject]@{ id = $Id; name = $s.name; mods = @($s.mods | ForEach-Object {
+    [PSCustomObject]@{ id = $_.id; name = $_.name; e = [double]$_.size } }) })
+
+  $gb = [Math]::Round(($new | ForEach-Object { [double]$_.size } | Measure-Object -Sum).Sum / 1GB, 2)
+  Stop-DS | Out-Null
+  $r = Start-DS
+  "added '$name': $($new.Count) new mods (~$gb GB) queued at the end, $(@($s.mods).Count - $new.Count) already on disk ($r)"
+}
+
+# per-run token: the six state-changing endpoints only answer requests that carry
+# it, so another website open in the browser cannot drive this server (CSRF)
+$token = [guid]::NewGuid().ToString('N')
+$mutating = '/start','/pause','/verify','/queue-server','/resume-batch','/make-preset','/add-server'
+
 $html = @'
 <!doctype html><html><head><meta charset="utf-8"><title>Reforger Mods Download</title>
 <style>
@@ -231,10 +318,12 @@ $html = @'
  button.grey{background:#4a4e58} button.amber{background:#b3872e}
  button.mini{padding:2px 10px;font-size:12px;margin:0 0 0 6px} button.mini.grey{background:#4a4e58} button.mini.amber{background:#b3872e}
  button:disabled{opacity:.5;cursor:default}
+ input{background:#26282e;border:1px solid #3a3d45;color:#d6d8de;border-radius:7px;padding:8px 12px;font-size:14px;width:420px}
  ul{list-style:none;margin:6px 0 0;padding:0;font-size:13px}
  li{padding:3px 0;border-bottom:1px solid #26282e}
  details{margin:2px 0} summary{cursor:pointer;font-size:13px;padding:3px 0;color:#fff}
- #srv ul{margin:4px 0 0 16px}
+ #srv ul,#bs ul{margin:4px 0 0 16px}
+ #bs .bs{margin:4px 0 0 16px}
  .ok{color:#7ed07e} .warn{color:#e0b13e} .bad{color:#e06c6c} .dim{color:#8a8e98}
  #vres{display:none}
  .big{font-size:26px;font-weight:600;color:#fff}
@@ -252,13 +341,18 @@ $html = @'
  <div id="vres" class="card" style="margin:14px 0 0;padding:10px 14px"></div>
 </div>
 <div class="card" id="actcard" style="display:none"><h2 style="font-size:15px;margin:0 0 8px;color:#fff">Downloading now</h2><div id="act"></div></div>
+<div class="card"><h2 style="font-size:15px;margin:0 0 8px;color:#fff">Server browser <span class="dim">live</span></h2>
+ <div><input id="bq" placeholder="search servers (e.g. PVE, Cold Front, ArmaDudes)..." onkeydown="if(event.key==='Enter')browse()"><button onclick="browse()">Search</button></div>
+ <div id="bs" class="dim" style="margin-top:8px">type something and hit Search to list live servers</div>
+</div>
 <div class="card"><h2 style="font-size:15px;margin:0 0 4px;color:#fff">Servers <span id="srvcount" class="dim"></span></h2><div id="srv" class="dim">loading server lists...</div></div>
 <div class="card"><h2 style="font-size:15px;margin:0 0 4px;color:#fff">Completed <span id="reccount" class="dim"></span></h2><ul id="rec"></ul></div>
 <script>
+const T='__T__';
 function esc(x){return String(x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 function sz(b){return b>=1073741824?(b/1073741824).toFixed(2)+' GB':b>=1048576?(b/1048576).toFixed(1)+' MB':b>=1024?(b/1024).toFixed(1)+' KB':Math.round(b)+' B'}
-let SRV=null,lastKey='';
-async function loadSrv(){try{SRV=await (await fetch('/servers')).json()}catch(e){}}
+let SRV=null,BR=null,lastKey='';
+async function loadSrv(){try{SRV=await (await fetch('/servers')).json();lastKey='';}catch(e){}}
 function renderSrv(D,A,B){
  if(!SRV)return;
  document.getElementById('srvcount').textContent='('+SRV.servers.length+')';
@@ -274,8 +368,44 @@ function renderSrv(D,A,B){
    }).join('')+'</ul></details>';
  }).join('');
 }
+async function browse(){
+ const q=document.getElementById('bq').value.trim();
+ const el=document.getElementById('bs');
+ el.textContent='searching live servers...';
+ try{
+  const r=await (await fetch('/browse?q='+encodeURIComponent(q))).json();
+  BR=r.servers; renderBrowse();
+ }catch(e){ el.innerHTML='<span class="bad">search failed: '+esc(String(e))+'</span>'; }
+}
+function renderBrowse(){
+ const el=document.getElementById('bs');
+ if(!BR||!BR.length){el.innerHTML='<span class="dim">no servers found</span>';return;}
+ el.innerHTML=BR.map(v=>
+  '<details ontoggle="bsToggle(this,\''+v.id+'\')"><summary>'+esc(v.name)+
+  ' <span class="dim">'+v.players+'/'+v.maxPlayers+(v.online?'':' &middot; offline')+' &middot; '+v.modCount+' mods</span>'+
+  '<button class="mini" onclick="addSrv(\''+v.id+'\',event)">Add server</button></summary>'+
+  '<div class="bs" data-id="'+v.id+'"><span class="dim">loading modlist...</span></div></details>').join('');
+}
+function bsToggle(d,id){ if(d.open&&!d.dataset.l){d.dataset.l=1;loadBS(id,d);} }
+async function loadBS(id,d){
+ const box=d.querySelector('.bs');
+ try{
+  const j=await (await fetch('/browse-server?id='+id)).json();
+  const ok=j.mods.filter(m=>m.have).length;
+  box.innerHTML='<div class="dim">'+ok+' / '+j.mods.length+' mods on disk - '+sz(j.missingBytes||0)+' to download</div><ul>'+
+   j.mods.map(m=>'<li>'+(m.have?'<span class="ok">&#10003;</span>':'<span class="dim">&#8226;</span>')+' '+esc(m.name)+' <span class="dim">'+(m.expB>0?sz(m.expB):'')+'</span></li>').join('')+'</ul>';
+ }catch(e){ box.innerHTML='<span class="bad">'+esc(String(e).replace('Error: ',''))+'</span>'; }
+}
+async function addSrv(id,ev){
+ ev.stopPropagation();
+ const b=ev.target; b.disabled=true; b.textContent='...';
+ if(confirm('Add this server? Its missing mods are queued at the END of the current download queue.'))await post('add-server?id='+id);
+ b.disabled=false; b.textContent='Add server';
+ loadSrv();
+}
 async function tick(){
  try{
+  if(!SRV)loadSrv();
   const s=await (await fetch('/status')).json();
   const boot=document.getElementById('boot'); if(boot)boot.remove();
   document.getElementById('st').innerHTML=s.running
@@ -317,7 +447,7 @@ async function tick(){
 }
 async function post(w){
  try{
-  const r=await fetch('/'+w,{method:'POST'});
+  const r=await fetch('/'+w+(w.indexOf('?')>=0?'&':'?')+'t='+T,{method:'POST'});
   const j=await r.json();
   if(j.msg)alert(j.msg);
   if(j.error)alert('failed: '+j.error);
@@ -348,12 +478,17 @@ loadSrv(); tick(); setInterval(tick,500);
 $l = [System.Net.HttpListener]::new(); $l.Prefixes.Add($Url)
 try { $l.Start() }
 catch {
-  # port busy -> a dashboard is already serving; just open it
-  Write-Host 'dashboard already running - opening browser' -ForegroundColor Cyan
-  Start-Process $Url
-  exit 0
+  # port busy: a just-killed dashboard's keep-alive sockets linger for a while.
+  # retry once before concluding another instance is actually serving.
+  Start-Sleep 5
+  try { $l = [System.Net.HttpListener]::new(); $l.Prefixes.Add($Url); $l.Start() }
+  catch {
+    Write-Host 'dashboard already running - opening browser' -ForegroundColor Cyan
+    Start-Process $Url
+    exit 0
+  }
 }
-Write-Host '=== Arma Reforger Mods - web download dashboard ===' -ForegroundColor White
+Write-Host '=== Arma Reforger Mods - web dashboard ===' -ForegroundColor White
 Write-Host "open: $Url   (keep this window open; closing it only stops the UI, not the download)" -ForegroundColor Cyan
 Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass',`
   '-File',"$PSScriptRoot\sync-addons.ps1",'-Loop'   # auto-mirror completed mods into client addons
@@ -365,9 +500,16 @@ while ($l.IsListening) {
     $msg = $null   # must reset per request or it leaks into the next response body
     $path = $ctx.Request.Url.AbsolutePath
     $ctx.Response.Headers.Add('Cache-Control', 'no-store')
+    if ($path -in $mutating -and $ctx.Request.QueryString['t'] -ne $token) {
+      $ctx.Response.StatusCode = 403
+      $b = [Text.Encoding]::UTF8.GetBytes('{"error":"bad or missing token"}')
+      $ctx.Response.ContentType = 'application/json'
+      $ctx.Response.OutputStream.Write($b, 0, $b.Length)
+      continue
+    }
     switch ($path) {
       '/' {
-        $b = [Text.Encoding]::UTF8.GetBytes($html)
+        $b = [Text.Encoding]::UTF8.GetBytes($html.Replace('__T__', $token))
         $ctx.Response.ContentType = 'text/html; charset=utf-8'
         $ctx.Response.ContentLength64 = $b.Length
         $ctx.Response.OutputStream.Write($b, 0, $b.Length)
@@ -382,12 +524,32 @@ while ($l.IsListening) {
         $ctx.Response.ContentType = 'application/json'
         $ctx.Response.OutputStream.Write($b, 0, $b.Length)
       }
+      '/browse' {
+        $b = [Text.Encoding]::UTF8.GetBytes((@{ servers = (Get-Browse $ctx.Request.QueryString['q']) } | ConvertTo-Json -Depth 4 -Compress))
+        $ctx.Response.ContentType = 'application/json'
+        $ctx.Response.OutputStream.Write($b, 0, $b.Length)
+      }
+      '/browse-server' {
+        $s = Get-Detail $ctx.Request.QueryString['id']
+        $have = Get-HaveIds
+        $rows = @($s.mods | ForEach-Object {
+          $exp = if ($sizeMap.ContainsKey($_.id)) { [double]$sizeMap[$_.id].bytes } else { [double]$_.size }
+          [PSCustomObject]@{ id = $_.id; name = $_.name; expB = $exp; have = [bool]$have.ContainsKey($_.id) } })
+        $missing = @($rows | Where-Object { -not $_.have })
+        $out = @{ name = $s.name; online = [bool]$s.online; mods = $rows
+                  haveCount = @($rows | Where-Object { $_.have }).Count
+                  missingBytes = [double]($missing | ForEach-Object { $_.expB } | Measure-Object -Sum).Sum }
+        $b = [Text.Encoding]::UTF8.GetBytes(($out | ConvertTo-Json -Depth 4 -Compress))
+        $ctx.Response.ContentType = 'application/json'
+        $ctx.Response.OutputStream.Write($b, 0, $b.Length)
+      }
       '/start'  { $msg = Start-DS;        Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Green }
       '/pause'  { $msg = Stop-DS;         Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Yellow }
       '/verify' { $msg = Invoke-Verify;   Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Cyan }
       '/queue-server' { $msg = Invoke-QueueServer $ctx.Request.QueryString['id']; Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Green }
       '/resume-batch' { $msg = Invoke-ResumeBatch; Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Green }
       '/make-preset'  { $msg = Invoke-MakePreset $ctx.Request.QueryString['id'];  Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Cyan }
+      '/add-server'   { $msg = Invoke-AddServer $ctx.Request.QueryString['id'];   Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Green }
       default   { $msg = $null; $ctx.Response.StatusCode = 404 }
     }
     if ($msg) {
