@@ -227,7 +227,7 @@ function Get-Status {
     }
   }
   $active = @($dirs.GetEnumerator() |
-    Where-Object { -not $completed.ContainsKey($_.Key) -and $_.Value.mtime -gt $now.AddMinutes(-5) } |
+    Where-Object { -not $completed.ContainsKey($_.Key) -and $_.Value.bytes -gt 0 -and $_.Value.mtime -gt $now.AddMinutes(-5) } |
     Sort-Object { $_.Value.mtime } -Descending | Select-Object -First 3) | ForEach-Object {
     $sm = $sizeMap[$_.Key]; $exp = if ($sm) { [double]$sm.bytes } else { 0 }
     $b = [double]$_.Value.bytes
