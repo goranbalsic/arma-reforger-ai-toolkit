@@ -7,7 +7,12 @@
 # Only mods already installed locally are included: the launcher deletes preset
 # entries it cannot resolve, so uninstalled workshop items would poison the whole
 # preset on exit. Re-run when the batch finishes to pick up the rest.
-param([Parameter(Mandatory = $true)][string]$ServerId, [string]$ConfPath)
+param(
+  [Parameter(Mandatory = $true)][string]$ServerId,
+  [string]$ConfPath,
+  [string]$Name,                 # preset name (default: the server's short name)
+  [string[]]$Exclude = @()       # regex patterns: mods whose name matches are left out
+)
 $ErrorActionPreference = 'Stop'
 $Data = if ($env:RFMM_DATA) { $env:RFMM_DATA } else { Join-Path $PSScriptRoot 'data' }
 
@@ -20,7 +25,7 @@ $conf = if ($ConfPath) { $ConfPath } else {
 $srvs = Get-Content "$Data\batch1-servers.json" -Raw | ConvertFrom-Json
 $clAddons = "$env:USERPROFILE\Documents\My Games\ArmaReforger\addons"
 
-if (Get-Process ArmaReforgerSteam -ErrorAction SilentlyContinue) { throw 'Game is running - close it first (it rewrites this file on exit)' }
+if (-not $ConfPath -and (Get-Process ArmaReforgerSteam -ErrorAction SilentlyContinue)) { throw 'Game is running - close it first (it rewrites this file on exit)' }
 
 $text = [IO.File]::ReadAllText($conf)
 
@@ -47,7 +52,8 @@ if ($mp -ge 0) {
 
 $srv = @($srvs.servers | Where-Object { $_.id -eq $ServerId })[0]
 if (-not $srv) { throw "server $ServerId is not in batch1-servers.json" }
-$presetName = if ($srv.PSObject.Properties['key'] -and $srv.key) { [string]$srv.key }
+$presetName = if ($Name) { $Name }
+              elseif ($srv.PSObject.Properties['key'] -and $srv.key) { [string]$srv.key }
               else { ([string]$srv.name -split '\|')[0].Trim() }
 if ($presetName.Length -gt 60) { $presetName = $presetName.Substring(0, 60).Trim() }
 $presetName = $presetName -replace '"', "'"
@@ -58,9 +64,16 @@ Get-ChildItem $clAddons -Directory |
   Where-Object { $_.Name -match '_([0-9A-F]{16})$' } |
   ForEach-Object { $installed[$Matches[1]] = ($_.Name -replace '_[0-9A-F]{16}$', '') }
 $mods = @($srv.mods | Where-Object { $installed.ContainsKey($_.id) })
-"server: $($srv.name)  mods=$(@($srv.mods).Count)  installed here: $($mods.Count)"
-if ($mods.Count -lt @($srv.mods).Count) {
-  "note: $(@($srv.mods).Count - $mods.Count) mods not installed yet - re-run this after the batch finishes"
+$installedCount = $mods.Count
+$dropped = @()
+if ($Exclude.Count) {
+  $dropped = @($mods | Where-Object { $n = $_.name; @($Exclude | Where-Object { $n -match $_ }).Count -gt 0 })
+  $mods = @($mods | Where-Object { $n = $_.name; @($Exclude | Where-Object { $n -match $_ }).Count -eq 0 })
+  "excluded for this preset: $($dropped.Count) mod(s): $(($dropped | ForEach-Object { $_.name }) -join ', ')"
+}
+"server: $($srv.name)  mods=$(@($srv.mods).Count)  installed here: $installedCount  in this preset: $($mods.Count)"
+if ($installedCount -lt @($srv.mods).Count) {
+  "note: $(@($srv.mods).Count - $installedCount) mod(s) not installed yet - re-run this after the batch finishes"
 }
 if (-not $mods) { throw 'no installed mods for this preset yet' }
 
