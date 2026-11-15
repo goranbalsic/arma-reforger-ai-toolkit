@@ -54,55 +54,93 @@ function Get-ClientIds {
   # outside this batch). Same size rule as everything else: a client copy that
   # does not match the Workshop size is partial/outdated and must not mask a
   # re-download - otherwise a stale folder blocks the mod forever.
-  if (((Get-Date) - $script:clCacheAt).TotalSeconds -lt 5) { return $script:clCache }
-  $ids = @(Get-ChildItem "$env:USERPROFILE\Documents\My Games\ArmaReforger\addons" -Directory -ErrorAction SilentlyContinue |
-    ForEach-Object {
-      if ($_.Name -notmatch '_([0-9A-F]{16})$') { return }
-      $id = $Matches[1]
+  # .NET enumeration: 85 ms for 757 folders (Get-ChildItem per folder took 1.4 s)
+  if (((Get-Date) - $script:clCacheAt).TotalSeconds -lt 20) { return $script:clCache }
+  $ids = @()
+  $root = [IO.DirectoryInfo]::new("$env:USERPROFILE\Documents\My Games\ArmaReforger\addons")
+  if ($root.Exists) {
+    $sum = @{}
+    foreach ($d in $root.EnumerateDirectories()) {
+      if ($d.Name -match '_([0-9A-F]{16})$') { $sum[$d.Name] = [double]0 }
+    }
+    foreach ($f in $root.EnumerateFiles('*', [IO.SearchOption]::AllDirectories)) {
+      $n = $f.Directory.Name
+      if ($sum.ContainsKey($n)) { $sum[$n] += $f.Length }
+    }
+    $ids = @(foreach ($n in $sum.Keys) {
+      $id = [regex]::Match($n, '_([0-9A-F]{16})$').Groups[1].Value
       $sm = $sizeMap[$id]; $exp = if ($sm) { [double]$sm.bytes } else { 0 }
-      if (-not $exp) { $id; return }   # unknown size: cannot judge, keep old rule
-      $bytes = (Get-ChildItem $_.FullName -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
-      if ([Math]::Abs($bytes - $exp) -le [Math]::Max(2MB, 0.02 * $exp)) { $id }
+      if (-not $exp) { $id; continue }   # unknown size: cannot judge, keep old rule
+      if ([Math]::Abs($sum[$n] - $exp) -le [Math]::Max(2MB, 0.02 * $exp)) { $id }
     })
+  }
   $script:clCache = $ids; $script:clCacheAt = Get-Date
   $ids
 }
 
 function Get-DirMap {
-  # one recursive pass, grouped by folder - far faster than per-folder listings
-  if (((Get-Date) - $script:dirCacheAt).TotalSeconds -lt 1) { return $script:dirCache }
+  # one .NET enumeration pass, grouped by folder: 111 ms for 6k files where
+  # Get-ChildItem -Recurse took 236 ms. mtime = the folder's newest file time:
+  # the DS appends to preallocated chunks without touching directory times.
+  if (((Get-Date) - $script:dirCacheAt).TotalSeconds -lt 0.5) { return $script:dirCache }
   $map = @{}
-  Get-ChildItem $Addons -Recurse -File -ErrorAction SilentlyContinue |
-    ForEach-Object {
-      if ($_.Directory.Name -notmatch '_([0-9A-F]{16})$') { return }
-      if ($_.Directory.Name -match '^RHS-ContentPack0[12]_') { return }   # old pre-batch installs, not batch mods
+  $root = [IO.DirectoryInfo]::new($Addons)
+  if ($root.Exists) {
+    foreach ($f in $root.EnumerateFiles('*', [IO.SearchOption]::AllDirectories)) {
+      $dir = $f.Directory.Name
+      if ($dir -notmatch '_([0-9A-F]{16})$') { continue }
+      if ($dir -match '^RHS-ContentPack0[12]_') { continue }   # old pre-batch installs, not batch mods
       $g = $Matches[1]
       $e = $map[$g]
       if (-not $e) {
-        $e = $map[$g] = @{ name = $_.Directory.Name -replace '_[0-9A-F]{16}$', ''; bytes = [double]0
-                           assembled = 0; mtime = $_.Directory.LastWriteTime }
+        $e = $map[$g] = @{ name = $dir -replace '_[0-9A-F]{16}$', ''; bytes = [double]0
+                           assembled = 0; mtime = $f.LastWriteTime }
       }
-      $e.bytes += $_.Length
-      if ($_.Name -in 'addon.gproj','meta','resourceDatabase.rdb') { $e.assembled++ }
+      $e.bytes += $f.Length
+      if ($f.LastWriteTime -gt $e.mtime) { $e.mtime = $f.LastWriteTime }
+      if ($f.Name -in 'addon.gproj','meta','resourceDatabase.rdb') { $e.assembled++ }
     }
+  }
   foreach ($e in $map.Values) { $e.assembled = ($e.assembled -eq 3) }
   $script:dirCache = $map; $script:dirCacheAt = Get-Date
   $map
 }
 
 function Get-GlobalSpeed {
+  # the DS prints its own "Download speed" once per mod (measured 30 s+ apart)
+  # and preallocated chunk files make a disk-byte delta useless (0 B growth while
+  # downloading) - so return the number WITH its age and let the page say how old
   $lg = Get-Log
-  if (-not $lg -or $lg.LastWriteTime -lt (Get-Date).AddMinutes(-2)) { return 0 }   # stale log = DS idle between mods
-  $line = Get-Content $lg.FullName -Tail 60 | Select-String 'Download speed ([0-9.]+) KB/s' | Select-Object -Last 1
-  if ($line) { [Math]::Round([double]$line.Matches[0].Groups[1].Value * 1024) } else { 0 }
+  if (-not $lg -or $lg.LastWriteTime -lt (Get-Date).AddMinutes(-2)) { return @{ b = 0; age = 999 } }
+  $line = Get-Content $lg.FullName -Tail 200 | Select-String 'Download speed ([0-9.]+) KB/s' | Select-Object -Last 1
+  if (-not $line) { return @{ b = 0; age = 999 } }
+  $b = [Math]::Round([double]$line.Matches[0].Groups[1].Value * 1024)
+  $age = 999
+  try {
+    $ts = [datetime]::ParseExact($line.Line.Substring(0, 8), 'HH:mm:ss', $null)
+    if ($ts -gt (Get-Date).AddMinutes(1)) { $ts = $ts.AddDays(-1) }   # log line from before midnight
+    $age = [Math]::Round(((Get-Date) - $ts).TotalSeconds)
+  } catch { }
+  @{ b = $b; age = $age }
 }
 
 function Get-Status {
   $dirs = Get-DirMap
-  # only batch mods count toward progress; dependency mods the DS auto-pulls
-  # have no sizeMap entry and would otherwise push doneB past totalB
-  $doneBytes = ($dirs.GetEnumerator() | Where-Object { $sizeMap.ContainsKey($_.Key) } |
-    ForEach-Object { [double]$_.Value.bytes } | Measure-Object -Sum).Sum
+  $sp = Get-GlobalSpeed
+  $clIds = Get-ClientIds
+  $clSet = @{}
+  foreach ($i in $clIds) { $clSet[$i] = $true }
+  # progress = per mod min(bytes on disk, Workshop size) + mods installed only in
+  # the client. Without the cap, temp chunk copies make doneB exceed the total
+  # (measured 63.56 GB of 63.27 GB with 53 mods still missing => a full bar).
+  $doneBytes = [double]0
+  foreach ($id in $sizeMap.Keys) {
+    $exp = [double]$sizeMap[$id].bytes
+    $d = $dirs[$id]
+    if ($d -and $d.bytes -gt 0) {
+      $doneBytes += if ($exp -gt 0) { [Math]::Min([double]$d.bytes, $exp) } else { [double]$d.bytes }
+    } elseif ($clSet.ContainsKey($id)) { $doneBytes += $exp }
+  }
 
   # complete = folder stable (no writes 2 min) AND assembled AND size matches Workshop (when known).
   # the DS writes gproj/meta/rdb before the data paks, so "assembled" alone lies mid-download.
@@ -123,7 +161,7 @@ function Get-Status {
     Sort-Object { $_.Value.mtime } -Descending | Select-Object -First 3) | ForEach-Object {
     $sm = $sizeMap[$_.Key]; $exp = if ($sm) { [double]$sm.bytes } else { 0 }
     @{ id = $_.Key; name = $_.Value.name; b = [double]$_.Value.bytes; expB = $exp;
-       pct = if ($exp) { [Math]::Min(100, [int](100 * $_.Value.bytes / $exp)) } else { 0 } }
+       pct = if ($exp) { [Math]::Min(100, [Math]::Round(100 * $_.Value.bytes / $exp, 1)) } else { 0 } }
   }
 
   # all completed mods, newest first (full list - the page shows every one).
@@ -133,11 +171,12 @@ function Get-Status {
     @{ id = $_.Key; name = $_.Value.name; b = [double]$_.Value.bytes }
   }
 
-  @{ running = [bool](Get-DS); speedB = Get-GlobalSpeed
+  @{ running = [bool](Get-DS); speedB = $sp.b; speedAge = $sp.age
      doneB = [double]$doneBytes; totalB = [double]$TotalBytes
      pct = [Math]::Min(100, [int](100 * $doneBytes / $TotalBytes))
+     pctF = [Math]::Round([Math]::Min(100, 100 * $doneBytes / $TotalBytes), 2)
      doneCount = $doneCount; totalMods = $sizeMap.Count
-     active = @($active); recent = @($recent); cl = (Get-ClientIds); tok = $token; verify = $verify }
+     active = @($active); recent = @($recent); cl = $clIds; tok = $token; verify = $verify }
 }
 
 if ($Check) {
@@ -365,7 +404,7 @@ $html = @'
 <script>
 let T='__T__';   // refreshed from /status so an open page survives dashboard restarts
 function esc(x){return String(x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
-function sz(b){return b>=1073741824?(b/1073741824).toFixed(2)+' GB':b>=1048576?(b/1048576).toFixed(1)+' MB':b>=1024?(b/1024).toFixed(1)+' KB':Math.round(b)+' B'}
+function sz(b){return b>=1073741824?(b/1073741824).toFixed(b>=107374182400?2:3)+' GB':b>=1048576?(b/1048576).toFixed(1)+' MB':b>=1024?(b/1024).toFixed(1)+' KB':Math.round(b)+' B'}
 let SRV=null,BR=null,lastKey='';
 async function loadSrv(){try{SRV=await (await fetch('/servers')).json();lastKey='';}catch(e){}}
 function renderSrv(D,A,B){
@@ -431,8 +470,10 @@ async function tick(){
     ?'<span class="dot" style="background:#4cc35e"></span><span class="ok">running</span>'
     :'<span class="dot" style="background:#e06c6c"></span><span class="bad">stopped</span>';
   document.getElementById('gbtxt').textContent=sz(s.doneB)+' / '+sz(s.totalB);
-  document.getElementById('tbar').style.width=s.pct+'%';
-  document.getElementById('spd').textContent=s.running?(s.speedB>0?sz(s.speedB)+'/s':'idle'):'paused';
+  document.getElementById('tbar').style.width=(s.pctF!=null?s.pctF:s.pct)+'%';
+  document.getElementById('spd').textContent=s.running
+    ?(s.speedB>0?sz(s.speedB)+'/s'+(s.speedAge>15?' ('+Math.round(s.speedAge)+' s ago)':''):'idle')
+    :'paused';
   document.getElementById('cnt').textContent=s.doneCount+' / '+s.totalMods+' mods assembled';
   const eta=(s.speedB>51200)?Math.round((s.totalB-s.doneB)/s.speedB/60)+' min left':'--';
   document.getElementById('etabox').textContent=eta;
@@ -490,7 +531,8 @@ async function act(w){
  await post(w);
  if(b){b.disabled=false;b.textContent=w==='start'?'Start / Resume':w==='pause'?'Pause':'Verify mods';}
 }
-loadSrv(); tick(); setInterval(tick,500);
+loadSrv();
+(async function loop(){ await tick(); setTimeout(loop,300); })();   // one request in flight, ~0.5 s cadence
 </script></body></html>
 '@
 
