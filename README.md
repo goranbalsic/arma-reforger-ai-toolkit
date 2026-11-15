@@ -25,6 +25,7 @@ the dedicated server files (used purely as a downloader).
 | `tools/build-index.py` | Index installed addons + launcher presets into a machine-readable inventory |
 | `tools/deploy-mod.ps1` | Install a packed addon and enable it at the end of a launcher preset |
 | `install.ps1` | Copy the skill into an agent's skill folder, or `-Check` the toolchain |
+| `docs/debugging-stack.md` + `tools/audit.ps1` | Static checks for this repo (PSScriptAnalyzer, ruff, gitleaks at full speed; semgrep/trivy with `-Deep`) and the MCP wiring for OpenCode |
 
 ## Requirements
 

@@ -15,7 +15,6 @@ import argparse
 import os
 import re
 import shutil
-import struct
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
