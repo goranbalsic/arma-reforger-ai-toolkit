@@ -191,6 +191,7 @@ function Get-GlobalSpeed {
 
 function Get-Status {
   $dirs = Get-DirMap
+  $runningNow = [bool](Get-DS)
   $sp = Get-GlobalSpeed
   # live rate from the bytes actually landing on disk: the DS's own log line
   # appears once per mod (up to 30 s old). The DS writes in ~3 MB fragments, so a
@@ -245,7 +246,9 @@ function Get-Status {
   }
   $doneCount = @($sizeMap.Keys | Where-Object { $completed.ContainsKey($_) -or $clSet.ContainsKey($_) }).Count
 
-  # active = every folder currently being written (no cap: the page shows all)
+  # active = every folder currently being written (no cap: the page shows all).
+  # Only when the downloader is actually running: a stopped process leaves
+  # partial folders behind and they used to appear as "downloading".
   $logProgress = @{}
   $lgNow = Get-Log
   if ($lgNow) {
@@ -255,7 +258,7 @@ function Get-Status {
     }
   }
   $active = @($dirs.GetEnumerator() |
-    Where-Object { -not $completed.ContainsKey($_.Key) -and $_.Value.bytes -gt 0 -and $_.Value.mtime -gt $now.AddMinutes(-5) } |
+    Where-Object { $runningNow -and -not $completed.ContainsKey($_.Key) -and $_.Value.bytes -gt 0 -and $_.Value.mtime -gt $now.AddMinutes(-5) } |
     Sort-Object { $_.Value.mtime } -Descending) | ForEach-Object {
     $sm = $sizeMap[$_.Key]; $exp = if ($sm) { [double]$sm.bytes } else { 0 }
     $b = [double]$_.Value.bytes
@@ -281,7 +284,7 @@ function Get-Status {
   try { $queueList = @((Get-Content $Cfg -Raw | ConvertFrom-Json).game.mods |
         ForEach-Object { @{ id = $_.modId; name = $_.name } }) } catch { }
 
-  @{ running = [bool](Get-DS); speedB = $sp.b; speedAge = $sp.age
+  @{ running = $runningNow; speedB = $sp.b; speedAge = $sp.age
      doneB = [double]$doneBytes; totalB = [double]$TotalBytes
      pct = if ($TotalBytes -gt 0) { [Math]::Min(100, [int](100 * $doneBytes / $TotalBytes)) } else { 0 }
      pctF = if ($TotalBytes -gt 0) { [Math]::Round([Math]::Min(100, 100 * $doneBytes / $TotalBytes), 2) } else { 0 }
@@ -300,6 +303,17 @@ function Start-DS {
   $script:pausedByUser = $false
   Remove-Item (Join-Path $Data 'paused.flag') -Force -ErrorAction SilentlyContinue
   if (Get-DS) { return 'already running' }
+  # resume interrupted work: a partial download is not in the queue after Clear
+  # queue, but Start / Resume should continue it instead of saying "empty"
+  $j0 = Get-Content $Cfg -Raw | ConvertFrom-Json
+  if (@($j0.game.mods).Count -eq 0) {
+    $partial = @(Get-PartialMods)
+    if ($partial.Count) {
+      $j0.game.mods = $partial
+      $j0 | ConvertTo-Json -Depth 5 | Set-Content $Cfg -Encoding UTF8
+      Write-Host "resuming $($partial.Count) unfinished download(s)" -ForegroundColor Cyan
+    }
+  }
   # the 1 MB download-list trap: trimming is lossless (DS skips done mods anyway),
   # skipping it makes the DS insta-crash ~30 s after a false "started"
   & "$PSScriptRoot\trim-config.ps1" | Out-Null
@@ -409,11 +423,28 @@ function Invoke-ResumeBatch {
   "full batch resumed: $($mods.Count) mods remaining ($r)"
 }
 
+function Get-PartialMods {
+  # mods that were started but are not complete (the resume set)
+  $dirs = Get-DirMap
+  @($dirs.GetEnumerator() | Where-Object {
+      $sm = $sizeMap[$_.Key]
+      $sm -and [double]$sm.bytes -gt 0 -and $_.Value.bytes -gt 0 -and
+      $_.Value.bytes -lt [double]$sm.bytes -and $_.Value.mtime -lt (Get-Date).AddMinutes(-1)
+    } | ForEach-Object { [PSCustomObject]@{ modId = $_.Key; name = $_.Value.name } })
+}
+
 function Invoke-StartQueue {
-  # start whatever is queued. Never rebuilds: "Queue all missing" is the button that
-  # fills the queue again, so Clear queue + Start stays clear.
+  # start whatever is queued. If the queue is empty but a download was interrupted,
+  # resume just those. It never refills from the servers - that is "Queue all missing".
   $j = Get-Content $Cfg -Raw | ConvertFrom-Json
   if (@($j.game.mods).Count -eq 0) {
+    $partial = @(Get-PartialMods)
+    if ($partial.Count) {
+      $j.game.mods = $partial
+      $j | ConvertTo-Json -Depth 5 | Set-Content $Cfg -Encoding UTF8
+      $r = Start-DS
+      return "resuming $($partial.Count) unfinished download(s) ($r)"
+    }
     return 'queue is empty - press Queue all missing to fetch every missing mod of your servers'
   }
   & "$PSScriptRoot\trim-config.ps1" | Out-Null
@@ -559,12 +590,14 @@ function Invoke-RefreshServers {
 }
 
 function Invoke-ClearQueue {
-  # empty the queue and stop the downloader - nothing is deleted from disk
+  # empty the queue and stop the downloader - nothing is deleted from disk.
+  # Stop FIRST: the DS writes its config back on shutdown, which would refill it.
+  $n = @((Get-Content $Cfg -Raw | ConvertFrom-Json).game.mods).Count
+  Stop-DS | Out-Null
+  Start-Sleep 2
   $j = Get-Content $Cfg -Raw | ConvertFrom-Json
-  $n = @($j.game.mods).Count
   $j.game.mods = @()
   $j | ConvertTo-Json -Depth 5 | Set-Content $Cfg -Encoding UTF8
-  Stop-DS | Out-Null
   "queue cleared ($n mods removed) - installed mods are untouched"
 }
 
