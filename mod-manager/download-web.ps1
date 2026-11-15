@@ -43,6 +43,7 @@ $script:maxDone = [double]0; $script:maxDoneTotal = [double]0   # high-water pro
 $script:pausedByUser = $false                                   # explicit Pause flag for watchdog.ps1
 $script:skipped = @(); $script:skippedAt = (Get-Date).AddMinutes(-10)
 $script:rateSamples = @()                                      # rolling byte-rate for a live speed
+$script:activeMax = @{}                                        # per-mod high-water progress
 
 $ApiBase = 'https://api.reforgermods.net/v2'
 $ApiH = @{ 'User-Agent' = 'arma-reforger-ai-toolkit/1.0' }
@@ -214,12 +215,31 @@ function Get-Status {
   $doneCount = @($sizeMap.Keys | Where-Object { $completed.ContainsKey($_) -or $clSet.ContainsKey($_) }).Count
 
   # active = folders still changing, newest first (up to 3)
+  # The DS writes fragments into <mod>\temp\ and consolidates them later, so the
+  # folder total dips mid-download. Keep a high-water mark per mod (and take the
+  # DS's own reported MB when it is ahead) so the bar only ever moves forward.
+  $logProgress = @{}
+  $lgNow = Get-Log
+  if ($lgNow) {
+    foreach ($ln in @(Get-Content $lgNow.FullName -Tail 40 -ErrorAction SilentlyContinue)) {
+      $pm = [regex]::Match($ln, '([^:]+):\s*\[[^\]]*\]\s*\d+%\s*(\d+)/(\d+) MB')
+      if ($pm.Success) { $logProgress[$pm.Groups[1].Value.Trim()] = [double]$pm.Groups[2].Value * 1MB }
+    }
+  }
   $active = @($dirs.GetEnumerator() |
     Where-Object { -not $completed.ContainsKey($_.Key) -and $_.Value.mtime -gt $now.AddMinutes(-5) } |
     Sort-Object { $_.Value.mtime } -Descending | Select-Object -First 3) | ForEach-Object {
     $sm = $sizeMap[$_.Key]; $exp = if ($sm) { [double]$sm.bytes } else { 0 }
-    @{ id = $_.Key; name = $_.Value.name; b = [double]$_.Value.bytes; expB = $exp;
-       pct = if ($exp) { [Math]::Min(100, [Math]::Round(100 * $_.Value.bytes / $exp, 1)) } else { 0 } }
+    $b = [double]$_.Value.bytes
+    if ($logProgress.ContainsKey($_.Value.name) -and $logProgress[$_.Value.name] -gt $b) { $b = $logProgress[$_.Value.name] }
+    if ($script:activeMax.ContainsKey($_.Key) -and $script:activeMax[$_.Key] -gt $b) { $b = $script:activeMax[$_.Key] }
+    $script:activeMax[$_.Key] = $b
+    @{ id = $_.Key; name = $_.Value.name; b = $b; expB = $exp
+       pct = if ($exp) { [Math]::Min(100, [Math]::Round(100 * $b / $exp, 1)) } else { 0 } }
+  }
+  # forget high-water marks of mods that are no longer downloading
+  foreach ($k in @($script:activeMax.Keys)) {
+    if (-not ($active | Where-Object { $_.id -eq $k })) { $script:activeMax.Remove($k) }
   }
 
   # all completed mods, newest first (full list - the page shows every one).

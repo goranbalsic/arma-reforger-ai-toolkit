@@ -73,11 +73,13 @@ while ($true) {
     continue
   }
 
-  # running: kill it if it stopped writing its log while mods are still queued
+  # running: kill it if it stopped writing its log while mods are still queued.
+  # A single fragment takes minutes on a slow line, so allow 5 minutes of silence
+  # before declaring it hung - every restart throws away the fragment in flight.
   if ($queued.Count -gt 0) {
     $lg = Get-LatestLog
-    if (-not $lg -or $lg.LastWriteTime -lt (Get-Date).AddMinutes(-3)) {
-      Write-Wd "downloader stalled 3 min with $($queued.Count) mods queued - restarting it"
+    if (-not $lg -or $lg.LastWriteTime -lt (Get-Date).AddMinutes(-5)) {
+      Write-Wd "downloader silent 5 min with $($queued.Count) mods queued - restarting it"
       $ds | Stop-Process -Force
       Start-Sleep 2
       Start-Process -FilePath $Exe -ArgumentList "-config `"$Cfg`" -profile `"$Profile`"" `
