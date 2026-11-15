@@ -1,4 +1,4 @@
-param([switch]$Check)
+﻿param([switch]$Check)
 # Arma Reforger mod manager - local web dashboard: batch downloader, live server
 # browser, per-server queue-first, launcher presets, client addon sync.
 # double-click the .cmd: serves http://localhost:8123 and opens your browser.
@@ -424,52 +424,102 @@ function Invoke-AddServer([string]$Id) {
 }
 
 function Invoke-RefreshServers {
-  # global refresh: drop every cache, re-read the local state files, then pull a
-  # fresh modlist for each tracked server (real counts, not cached ones)
+  # global refresh: re-read local state, pull a fresh modlist for every tracked
+  # server, resolve sizes for mods we have never seen, and queue the new ones
+  # (appended - installed and already-queued mods are never downloaded twice)
   $script:bCache = @{}; $script:bCacheAt = @{}
   $script:dCache = @{}; $script:dCacheAt = @{}
   $script:dirCacheAt = (Get-Date).AddMinutes(-10)   # force a disk rescan
   $script:clCacheAt = (Get-Date).AddMinutes(-10)
   $sz = Get-Content $Sizes -Raw | ConvertFrom-Json
   foreach ($p in $sz.mods.PSObject.Properties) { $sizeMap[$p.Name] = $p.Value }
-  # only fill sizes for mods that belong to the batch: adding every id a server
-  # reports would silently grow the batch (703 -> 839) and change its meaning
-  $known = @{}
-  foreach ($id in $sizeMap.Keys) { $known[$id] = $true }
-  foreach ($m in (Get-Content $Cfg -Raw | ConvertFrom-Json).game.mods) { $known[$m.modId] = $true }
   $ok = 0; $fail = 0
+  $needSize = [ordered]@{}
   foreach ($sv in $serverList) {
     try {
-      $d = Invoke-RestMethod -Uri "$ApiBase/servers/$($sv.id)" -Headers $ApiH -TimeoutSec 20
+      $d = Invoke-RestMethod -Uri "$ApiBase/servers/$($sv.id)" -Headers $ApiH -TimeoutSec 30
       if (-not $d.server -or -not @($d.server.mods).Count) { $fail++; continue }
       $sv.mods = @($d.server.mods | ForEach-Object {
         $m = $_
-        if (-not $sizeMap.ContainsKey($m.id) -and $known.ContainsKey($m.id) -and $m.sizeKnown -and $m.size) {
-          $sizeMap[$m.id] = @{ name = $m.name; bytes = [double]$m.size; exact = $true }
-          $sz.mods | Add-Member -NotePropertyName $m.id -NotePropertyValue ([PSCustomObject]@{ name = $m.name; bytes = [double]$m.size; exact = $true }) -Force
+        if (-not $sizeMap.ContainsKey($m.id)) {
+          if ($m.sizeKnown -and $m.size) {
+            $sizeMap[$m.id] = @{ name = $m.name; bytes = [double]$m.size; exact = $true }
+            $sz.mods | Add-Member -NotePropertyName $m.id -NotePropertyValue ([PSCustomObject]@{ name = $m.name; bytes = [double]$m.size; exact = $true }) -Force
+          } else { $needSize[$m.id] = $m.name }
         }
         $e = if ($sizeMap[$m.id]) { [double]$sizeMap[$m.id].bytes } else { [double]0 }
-        [PSCustomObject]@{ id = $m.id; name = $m.name; v = [string]$m.version; e = $e }
+        [PSCustomObject]@{ id = $m.id; name = $m.name; e = $e }
       })
       $ok++
     } catch { $fail++ }
     Start-Sleep -Milliseconds 300   # stay under the free tier (60/min)
   }
-  @{ servers = $serverList } | ConvertTo-Json -Depth 6 | Set-Content $ServersPath -Encoding UTF8
+  if ($needSize.Count) {
+    $ids = @($needSize.Keys)
+    for ($i = 0; $i -lt $ids.Count; $i += 400) {
+      $chunk = @($ids[$i..([Math]::Min($i + 399, $ids.Count - 1))])
+      try {
+        $body = @{ mode = 'replace'; desired = @($chunk | ForEach-Object { @{ id = $_ } }) } | ConvertTo-Json -Depth 5
+        $plan = Invoke-RestMethod -Uri "$ApiBase/tools/storage-plan" -Method Post -Body $body -Headers $ApiH -ContentType 'application/json' -TimeoutSec 120
+        foreach ($x in $plan.data.downloads) {
+          $sizeMap[$x.id] = @{ name = $x.name; bytes = [double]$x.bytes; exact = [bool]$x.exact }
+          $sz.mods | Add-Member -NotePropertyName $x.id -NotePropertyValue ([PSCustomObject]@{ name = $x.name; bytes = [double]$x.bytes; exact = [bool]$x.exact }) -Force
+        }
+      } catch { }
+    }
+  }
   $script:TotalBytes = ($sizeMap.Values | ForEach-Object { [double]$_.bytes } | Measure-Object -Sum).Sum
   $sz.totalBytes = [double]$script:TotalBytes
   $sz | ConvertTo-Json -Depth 4 | Set-Content $Sizes -Encoding UTF8
+  @{ servers = $serverList } | ConvertTo-Json -Depth 6 | Set-Content $ServersPath -Encoding UTF8
+
+  # queue what the servers run today and we do not have yet (append only)
   $have = Get-HaveIds
+  $j = Get-Content $Cfg -Raw | ConvertFrom-Json
+  $queued = @{}
+  foreach ($m in $j.game.mods) { $queued[$m.modId] = $true }
+  $want = [ordered]@{}
+  foreach ($sv in $serverList) { foreach ($m in $sv.mods) { $want[$m.id] = $m.name } }
+  $new = @($want.Keys | Where-Object { -not $have.ContainsKey($_) -and -not $queued.ContainsKey($_) })
+  if ($new.Count) {
+    $j.game.mods = @($j.game.mods) + @($new | ForEach-Object { [PSCustomObject]@{ modId = $_; name = [string]$want[$_] } })
+    $j | ConvertTo-Json -Depth 5 | Set-Content $Cfg -Encoding UTF8
+  }
   $onDisk = 0
   foreach ($sv in $serverList) { $onDisk += @($sv.mods | Where-Object { $have.ContainsKey($_.id) }).Count }
-  $st = Get-Status
-  "refreshed $ok/$(@($serverList).Count) servers$(if ($fail) { " ($fail unreachable)" }): $($sizeMap.Count) mods tracked, $onDisk server modslots on disk, $($st.doneCount)/$($sizeMap.Count) mods complete"
+  "refreshed $ok/$(@($serverList).Count) servers$(if ($fail) { " ($fail unreachable)" }): $($sizeMap.Count) mods tracked, $onDisk server mod slots installed, $($new.Count) new mods queued"
+}
+
+function Invoke-ClearQueue {
+  # empty the queue and stop the downloader - nothing is deleted from disk
+  $j = Get-Content $Cfg -Raw | ConvertFrom-Json
+  $n = @($j.game.mods).Count
+  $j.game.mods = @()
+  $j | ConvertTo-Json -Depth 5 | Set-Content $Cfg -Encoding UTF8
+  Stop-DS | Out-Null
+  "queue cleared ($n mods removed) - installed mods are untouched"
+}
+
+function Invoke-ResumeAll {
+  # queue every mod of every tracked server that is not installed yet
+  $have = Get-HaveIds
+  $want = [ordered]@{}
+  foreach ($sv in $serverList) { foreach ($m in $sv.mods) { $want[$m.id] = $m.name } }
+  foreach ($id in $sizeMap.Keys) { if (-not $want.Contains($id)) { $want[$id] = [string]$sizeMap[$id].name } }
+  $j = Get-Content $Cfg -Raw | ConvertFrom-Json
+  $mods = @($want.Keys | Where-Object { -not $have.ContainsKey($_) } |
+    ForEach-Object { [PSCustomObject]@{ modId = $_; name = [string]$want[$_] } })
+  $j.game.mods = $mods
+  $j | ConvertTo-Json -Depth 5 | Set-Content $Cfg -Encoding UTF8
+  Stop-DS | Out-Null
+  $r = Start-DS
+  "resume all: $($mods.Count) mods queued, $(@($want.Keys).Count - $mods.Count) already installed ($r)"
 }
 
 # per-run token: the six state-changing endpoints only answer requests that carry
 # it, so another website open in the browser cannot drive this server (CSRF)
 $token = [guid]::NewGuid().ToString('N')
-$mutating = '/start','/pause','/verify','/queue-server','/resume-batch','/make-preset','/add-server','/refresh-servers'
+$mutating = '/start','/pause','/verify','/queue-server','/resume-batch','/resume-all','/clear-queue','/make-preset','/add-server','/refresh-servers'
 
 $html = @'
 <!doctype html><html><head><meta charset="utf-8"><title>Reforger Mods Download</title>
@@ -506,7 +556,9 @@ $html = @'
  <div class="row"><span id="cnt" class="dim"></span><span class="dim" id="etabox"></span></div>
  <div style="margin-top:14px">
   <button id="bstart" onclick="act('start')">Start / Resume</button>
+  <button id="bresumeall" onclick="act('resume-all')">Resume all</button>
   <button id="bpause" class="grey" onclick="act('pause')">Pause</button>
+  <button id="bclear" class="grey" onclick="act('clear-queue')">Clear queue</button>
   <button id="bverify" class="amber" onclick="act('verify')">Verify mods</button>
  </div>
  <div id="vres" class="card" style="margin:14px 0 0;padding:10px 14px"></div>
@@ -668,9 +720,9 @@ async function refreshSrv(ev){
 }
 async function act(w){
  const b=event?event.target:null; if(b){b.disabled=true;b.textContent='...';}
- say(w==='start'?'starting / resuming the download...':w==='pause'?'pausing...':'checking installed mods against the Workshop...');
+ say(w==='start'?'starting / resuming the download...':w==='pause'?'pausing...':w==='clear-queue'?'clearing the queue...':w==='resume-all'?'queuing every missing mod of your servers...':'checking installed mods against the Workshop...');
  await post(w);
- if(b){b.disabled=false;b.textContent=w==='start'?'Start / Resume':w==='pause'?'Pause':'Verify mods';}
+ if(b){b.disabled=false;b.textContent=w==='start'?'Start / Resume':w==='pause'?'Pause':w==='clear-queue'?'Clear queue':w==='resume-all'?'Resume all':'Verify mods';}
 }
 loadSrv();
 (async function loop(){ await tick(); setTimeout(loop,200); })();   // one request in flight, ~0.4 s cadence
@@ -769,6 +821,8 @@ while ($l.IsListening) {
       '/verify' { $msg = Invoke-Verify;   Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Cyan }
       '/queue-server' { $msg = Invoke-QueueServer $ctx.Request.QueryString['id']; Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Green }
       '/resume-batch' { $msg = Invoke-ResumeBatch; Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Green }
+      '/resume-all'   { $msg = Invoke-ResumeAll;   Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Green }
+      '/clear-queue'  { $msg = Invoke-ClearQueue;  Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Yellow }
       '/make-preset'  { $msg = Invoke-MakePreset $ctx.Request.QueryString['id'];  Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Cyan }
       '/add-server'   { $msg = Invoke-AddServer $ctx.Request.QueryString['id'];   Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Green }
       '/refresh-servers' { $msg = Invoke-RefreshServers; Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Cyan }
