@@ -18,6 +18,12 @@ $Profile = "$Root\serverprofile"
 $Addons  = "$Profile\addons"
 $Url     = 'http://localhost:8123/'
 
+# first run on any machine: create empty state files instead of failing
+if (-not (Test-Path $Data)) { New-Item -ItemType Directory -Force $Data | Out-Null }
+if (-not (Test-Path $Sizes))       { '{"totalBytes":0,"mods":{}}' | Set-Content $Sizes -Encoding UTF8 }
+if (-not (Test-Path $Cfg))         { '{"game":{"mods":[]}}'     | Set-Content $Cfg -Encoding UTF8 }
+if (-not (Test-Path $ServersPath)) { '{"servers":[]}'           | Set-Content $ServersPath -Encoding UTF8 }
+
 $j = Get-Content $Sizes -Raw | ConvertFrom-Json
 $sizeMap = @{}
 foreach ($p in $j.mods.PSObject.Properties) { $sizeMap[$p.Name] = $p.Value }
@@ -162,18 +168,22 @@ function Get-Status {
   if ($doneBytes -gt $script:maxDone) { $script:maxDone = $doneBytes }
   $doneBytes = [Math]::Min($script:maxDone, [double]$TotalBytes)
 
-  # complete = folder stable (no writes 2 min) AND assembled AND size matches Workshop (when known).
-  # the DS writes gproj/meta/rdb before the data paks, so "assembled" alone lies mid-download.
+  # complete = folder stable (no writes 2 min) AND size matches the Workshop size.
+  # The 3 marker files are only used when the size is unknown: many Workshop mods
+  # ship without addon.gproj (8-file packs), and requiring it left them unfinished
+  # forever - never synced, so the launcher showed them as missing.
   $now = Get-Date
   $completed = @{}
   foreach ($e in $dirs.GetEnumerator()) {
     $d = $e.Value
-    if (-not $d.assembled -or $d.mtime -gt $now.AddMinutes(-2)) { continue }
+    if ($d.mtime -gt $now.AddMinutes(-2)) { continue }   # still being written
     $sm = $sizeMap[$e.Key]; $exp = if ($sm) { [double]$sm.bytes } else { 0 }
-    if ($exp -and [Math]::Abs($d.bytes - $exp) -gt [Math]::Max(2MB, 0.02 * $exp)) { continue }
+    if ($exp) {
+      if ([Math]::Abs($d.bytes - $exp) -gt [Math]::Max(2MB, 0.02 * $exp)) { continue }
+    } elseif (-not $d.assembled) { continue }
     $completed[$e.Key] = $true
   }
-  $doneCount = $completed.Count
+  $doneCount = @($sizeMap.Keys | Where-Object { $completed.ContainsKey($_) -or $clSet.ContainsKey($_) }).Count
 
   # active = folders still changing, newest first (up to 3)
   $active = @($dirs.GetEnumerator() |
@@ -193,8 +203,8 @@ function Get-Status {
 
   @{ running = [bool](Get-DS); speedB = $sp.b; speedAge = $sp.age
      doneB = [double]$doneBytes; totalB = [double]$TotalBytes
-     pct = [Math]::Min(100, [int](100 * $doneBytes / $TotalBytes))
-     pctF = [Math]::Round([Math]::Min(100, 100 * $doneBytes / $TotalBytes), 2)
+     pct = if ($TotalBytes -gt 0) { [Math]::Min(100, [int](100 * $doneBytes / $TotalBytes)) } else { 0 }
+     pctF = if ($TotalBytes -gt 0) { [Math]::Round([Math]::Min(100, 100 * $doneBytes / $TotalBytes), 2) } else { 0 }
      doneCount = $doneCount; totalMods = $sizeMap.Count
      active = @($active); recent = @($recent); cl = $clIds; tok = $token; verify = $verify }
 }
@@ -238,14 +248,17 @@ function Invoke-Verify {
   # mods the DS auto-pulls are outside sizeMap and skipped - upgrade by adding
   # their ids to the sizes file if deps ever need checking
   $dirs = Get-DirMap
+  $clSet = @{}
+  foreach ($i in (Get-ClientIds)) { $clSet[$i] = $true }
   $ok = 0; $partial = 0; $pending = 0; $suspects = @()
   foreach ($id in $sizeMap.Keys) {
     $sm = $sizeMap[$id]; $exp = [double]$sm.bytes
     $d = $dirs[$id]
+    $dsOk = $d -and (-not $exp -or [Math]::Abs($d.bytes - $exp) -le [Math]::Max(2MB, 0.02 * $exp))
+    if ($dsOk -or $clSet.ContainsKey($id)) { $ok++; continue }   # installed somewhere is installed
     if (-not $d) { $pending++; continue }
-    if (-not $d.assembled) { $partial++; continue }
-    if ([Math]::Abs($d.bytes - $exp) -le [Math]::Max(2MB, 0.02 * $exp)) { $ok++ }
-    else { $suspects += @{ name = $d.name; expB = [double]$exp; actB = [double]$d.bytes } }
+    $partial++
+    if ($exp) { $suspects += @{ name = $d.name; expB = [double]$exp; actB = [double]$d.bytes } }
   }
   $script:verify = @{ at = (Get-Date -f 'HH:mm:ss'); ok = $ok; partial = $partial
                       pending = $pending; suspects = $suspects }
@@ -260,9 +273,10 @@ function Get-HaveIds {
   $have = @{}
   foreach ($e in (Get-DirMap).GetEnumerator()) {
     $sm = $sizeMap[$e.Key]; $exp = if ($sm) { [double]$sm.bytes } else { 0 }
-    if ($e.Value.assembled -and (-not $exp -or [Math]::Abs($e.Value.bytes - $exp) -le [Math]::Max(2MB, 0.02 * $exp))) {
-      $have[$e.Key] = $true
-    }
+    if ($exp) {
+      # size is authoritative: some mods legitimately ship without addon.gproj
+      if ([Math]::Abs($e.Value.bytes - $exp) -le [Math]::Max(2MB, 0.02 * $exp)) { $have[$e.Key] = $true }
+    } elseif ($e.Value.assembled) { $have[$e.Key] = $true }
   }
   foreach ($id in (Get-ClientIds)) { $have[$id] = $true }
   $have
@@ -398,7 +412,7 @@ function Invoke-RefreshServers {
           $sz.mods | Add-Member -NotePropertyName $m.id -NotePropertyValue ([PSCustomObject]@{ name = $m.name; bytes = [double]$m.size; exact = $true }) -Force
         }
         $e = if ($sizeMap[$m.id]) { [double]$sizeMap[$m.id].bytes } else { [double]0 }
-        [PSCustomObject]@{ id = $m.id; name = $m.name; e = $e }
+        [PSCustomObject]@{ id = $m.id; name = $m.name; v = [string]$m.version; e = $e }
       })
       $ok++
     } catch { $fail++ }
@@ -460,7 +474,7 @@ $html = @'
 </div>
 <div class="card" id="actcard" style="display:none"><h2 style="font-size:15px;margin:0 0 8px;color:#fff">Downloading now</h2><div id="act"></div></div>
 <div class="card"><h2 style="font-size:15px;margin:0 0 8px;color:#fff">Server browser <span class="dim">live</span></h2>
- <div><input id="bq" placeholder="search servers (e.g. PVE, Cold Front, ArmaDudes)..." onkeydown="if(event.key==='Enter')browse()"><button onclick="browse()">Search</button></div>
+ <div><input id="bq" placeholder="search servers (e.g. PVE, Cold Front, Vietnam)..." onkeydown="if(event.key==='Enter')browse()"><button onclick="browse()">Search</button></div>
  <div id="bs" class="dim" style="margin-top:8px">type something and hit Search to list live servers</div>
 </div>
 <div class="card"><h2 style="font-size:15px;margin:0 0 4px;color:#fff">Servers <span id="srvcount" class="dim"></span><button class="mini" onclick="refreshSrv(event)" title="re-read disk + pull fresh modlists from reforgermods.net">Refresh all</button></h2><div id="srv" class="dim">loading server lists...</div></div>

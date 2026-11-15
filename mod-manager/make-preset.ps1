@@ -1,5 +1,5 @@
 # Build an Arma Reforger launcher preset from a server's real modlist.
-#   .\make-preset.ps1 -ServerId <server guid>     # or no argument for ArmaDudes 1
+#   .\make-preset.ps1 -ServerId <server guid>
 # The preset MUST be a child of m_aPresets { } inside
 # SCR_WorkshopAddonManagerPresetStorage. A preset written directly into the
 # storage block is silently dropped on the next game save (verified against a
@@ -7,7 +7,7 @@
 # Only mods already installed locally are included: the launcher deletes preset
 # entries it cannot resolve, so uninstalled workshop items would poison the whole
 # preset on exit. Re-run when the batch finishes to pick up the rest.
-param([string]$ServerId, [string]$ConfPath)
+param([Parameter(Mandatory = $true)][string]$ServerId, [string]$ConfPath)
 $ErrorActionPreference = 'Stop'
 $Data = if ($env:RFMM_DATA) { $env:RFMM_DATA } else { Join-Path $PSScriptRoot 'data' }
 
@@ -45,9 +45,8 @@ if ($mp -ge 0) {
   $wrapAfter = "`r`n  }"
 }
 
-$srv = if ($ServerId) { @($srvs.servers | Where-Object { $_.id -eq $ServerId })[0] }
-       else { @($srvs.servers | Where-Object { $_.name -match 'ArmaDudes 1\b' })[0] }
-if (-not $srv) { throw 'server not found in batch1-servers.json' }
+$srv = @($srvs.servers | Where-Object { $_.id -eq $ServerId })[0]
+if (-not $srv) { throw "server $ServerId is not in batch1-servers.json" }
 $presetName = if ($srv.PSObject.Properties['key'] -and $srv.key) { [string]$srv.key }
               else { ([string]$srv.name -split '\|')[0].Trim() }
 if ($presetName.Length -gt 60) { $presetName = $presetName.Substring(0, 60).Trim() }

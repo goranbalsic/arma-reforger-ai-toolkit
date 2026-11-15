@@ -2,7 +2,7 @@
   "id": "ArmaDudes_MRFix",
   "guid": "A1D0D0D0C0FFEE07",
   "title": "ArmaDudes Modern Russians Fix",
-  "rhsPak": "C:/Users/Administrator/Documents/My Games/ArmaReforger/addons/RHS-StatusQuo_595F2BF2F44836FB/data.pak",
+  "rhsPak": "C:/Users/<you>/Documents/My Games/ArmaReforger/addons/RHS-StatusQuo_595F2BF2F44836FB/data.pak",
   "dependencies": ["58D0FB3206B6F859", "595F2BF2F44836FB", "65252242719E5A1B", "1337C0DE5DABBEEF", "BADC0DEDABBEDA5E"],
   "faction": { "key": "USSR", "component": "6062F6587469882D" },
   "characters": { "filter": "/Factions/OPFOR/USSR" },

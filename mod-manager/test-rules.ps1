@@ -16,13 +16,15 @@ $fail = 0
 foreach ($r in $s.recent) {
   $dir = Get-ChildItem $ds -Directory -Filter "*_$($r.id)" -ErrorAction SilentlyContinue | Select-Object -First 1
   if (-not $dir) { "FAIL no folder: $($r.name)"; $fail++; continue }
-  $names = (Get-ChildItem $dir.FullName -File -ErrorAction SilentlyContinue).Name
-  $missing = @('addon.gproj', 'meta', 'resourceDatabase.rdb') | Where-Object { $names -notcontains $_ }
-  if ($missing) { "FAIL incomplete (missing: $($missing -join ', ')): $($r.name)"; $fail++ }
   if ($dir.LastWriteTime -gt (Get-Date).AddMinutes(-2)) { "FAIL still changing: $($r.name)"; $fail++ }
   $exp = if ($sizes[$r.id]) { [double]$sizes[$r.id].bytes } else { 0 }
-  if ($exp -and [Math]::Abs($r.b - $exp) -gt [Math]::Max(2MB, 0.02 * $exp)) {
-    "FAIL size off: $($r.name)  expected $exp  disk $($r.b)"; $fail++
+  if ($exp) {
+    # size is authoritative; several Workshop mods ship without addon.gproj
+    if ([Math]::Abs($r.b - $exp) -gt [Math]::Max(2MB, 0.02 * $exp)) { "FAIL size off: $($r.name)  expected $exp  disk $($r.b)"; $fail++ }
+  } else {
+    $names = (Get-ChildItem $dir.FullName -File -ErrorAction SilentlyContinue).Name
+    $missing = @('addon.gproj', 'meta', 'resourceDatabase.rdb') | Where-Object { $names -notcontains $_ }
+    if ($missing) { "FAIL incomplete (missing: $($missing -join ', ')): $($r.name)"; $fail++ }
   }
 }
 
@@ -34,20 +36,21 @@ foreach ($m in $cj.game.mods) { $queuedIds += $m.modId }
 Get-ChildItem $ds -Directory -ErrorAction SilentlyContinue |
   Where-Object { $_.Name -match '_([0-9A-F]{16})$' } |
   ForEach-Object {
-    $names = (Get-ChildItem $_.FullName -File -ErrorAction SilentlyContinue).Name
-    if (@('addon.gproj', 'meta', 'resourceDatabase.rdb') | Where-Object { $names -notcontains $_ }) { return }
-    $id = $Matches[1]; $exp = if ($sizes[$id]) { [double]$sizes[$id].bytes } else { 0 }
-    if (-not $exp) { return }
+    $id = $Matches[1]
+    $exp = if ($sizes[$id]) { [double]$sizes[$id].bytes } else { 0 }
     $bytes = (Get-ChildItem $_.FullName -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
-    if ([Math]::Abs($bytes - $exp) -gt [Math]::Max(2MB, 0.02 * $exp)) {
-      if ($s.recent.id -contains $id) { "FAIL partial folder counted as completed: $($_.Name)"; $fail++ }
-      else {
-        # orphaned: partial but not queued -> trim-config would keep it out and
-        # nothing ever re-downloads it (the bug that stranded 3 AD2 mods)
-        $queued = $queuedIds -contains $id
-        if ($queued) { "note: partial folder on disk, queued for re-download: $($_.Name)" }
-        else { "FAIL partial folder NOT queued (orphaned): $($_.Name)"; $fail++ }
-      }
+    if ($exp) {
+      if ([Math]::Abs($bytes - $exp) -le [Math]::Max(2MB, 0.02 * $exp)) { return }   # complete
+    } else {
+      return   # unknown size: cannot judge here
+    }
+    if ($s.recent.id -contains $id) { "FAIL partial folder counted as completed: $($_.Name)"; $fail++ }
+    else {
+      # orphaned: partial but not queued -> trim-config would keep it out and
+      # nothing ever re-downloads it (the bug that stranded 3 AD2 mods)
+      $queued = $queuedIds -contains $id
+      if ($queued) { "note: partial folder on disk, queued for re-download: $($_.Name)" }
+      else { "FAIL partial folder NOT queued (orphaned): $($_.Name)"; $fail++ }
     }
   }
 # the served page script must be syntactically valid: one stray bracket leaves

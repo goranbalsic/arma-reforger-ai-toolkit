@@ -1,4 +1,6 @@
+param([string]$Out = '')
 Add-Type -AssemblyName System.Drawing
+if (-not $Out) { $Out = Join-Path $PSScriptRoot '..\build\preview.png' }
 
 Add-Type @"
 using System;
@@ -44,7 +46,9 @@ $src = New-Object System.Drawing.Rectangle $x0, $y0, $cw, $ch
 $dst = New-Object System.Drawing.Rectangle $dx, 10, $dw, 556
 $g3.DrawImage($bmp, $dst, $src, [System.Drawing.GraphicsUnit]::Pixel)
 
-$path = 'C:\Users\Administrator\Documents\Default Project\arma-ai\work\mr-fix\preview.png'
+$path = $Out
+$dir = Split-Path $path -Parent
+if ($dir) { New-Item -ItemType Directory -Force $dir | Out-Null }
 $out.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
 $g.Dispose(); $g3.Dispose(); $bmp.Dispose(); $out.Dispose()
 Write-Output "saved $path"

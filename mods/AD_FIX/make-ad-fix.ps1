@@ -10,7 +10,6 @@
 param(
     [string]$GameAddons = 'C:\Program Files (x86)\Steam\steamapps\common\Arma Reforger\addons',
     [string]$UserAddons = "$env:USERPROFILE\Documents\My Games\ArmaReforger\addons",
-    [string]$ArmaAi = 'C:\Users\Administrator\Documents\Default Project\arma-ai',
     [string]$Out = '',
     [switch]$NoDeploy
 )
@@ -20,7 +19,7 @@ $repo = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $refpak = Join-Path $repo 'skill\arma-reforger-modding\scripts\refpak.py'
 $rhsPak = Join-Path $UserAddons 'RHS-StatusQuo_595F2BF2F44836FB\data.pak'
 if (-not (Test-Path $rhsPak)) { throw "RHS - Status Quo is not installed: $rhsPak" }
-if (-not $Out) { $Out = Join-Path $ArmaAi 'build\ad-fix' }
+if (-not $Out) { $Out = Join-Path $repo 'build\ad-fix' }
 
 # One entry per 1.9 break; each must match exactly once in the installed file.
 $patches = @(
@@ -36,7 +35,7 @@ $patches = @(
     }
 )
 
-$work = Join-Path $ArmaAi 'work\ad-fix'
+$work = Join-Path $repo 'work\ad-fix'
 Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
 foreach ($patch in $patches) {
     $dst = Join-Path $work $patch.rel.Replace('/', '\')

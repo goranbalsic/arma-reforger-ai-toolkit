@@ -8,6 +8,11 @@ from the command line.
 Built to be used by a coding agent (it ships as an OpenCode/Claude-style skill),
 but every piece works standalone from a terminal.
 
+**Just want every mod of your favourite servers installed?** Use
+[`mod-manager/`](mod-manager/README.md): a self-contained downloader with a
+local web dashboard. No modding knowledge or Python needed - only the game and
+the dedicated server files (used purely as a downloader).
+
 ## What is in the box
 
 | Piece | Purpose |

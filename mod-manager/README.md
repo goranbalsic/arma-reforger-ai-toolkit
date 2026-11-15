@@ -1,98 +1,118 @@
 # Arma Reforger Mod Manager
 
-Standalone local program: batch-downloads every mod of a list of Arma Reforger
-servers (always latest version, exact sizes), auto-installs them into the game's
-addon folder, and shows one web dashboard with a **live server browser**,
-per-server modlists, per-mod status, launcher presets and progress stats.
+A standalone local program that downloads **every mod of the servers you pick**
+at the latest Workshop version, installs them into the game, and can build a
+launcher preset per server.
 
-Runs on Windows PowerShell 5.1 (built into Windows). No dependencies.
+Runs on Windows PowerShell 5.1 (built into Windows). No dependencies, no
+account, no publishing.
 
-## Start
+## What it does
 
-Double-click **`Start Mods Download.cmd`** (or run
-`powershell -File download-web.ps1`). It serves http://localhost:8123 and opens
-the browser. The dashboard window must stay open; closing it stops only the UI,
-not a running download.
+- **Batch downloader**: the Arma Reforger *dedicated server* binary is used as a
+  downloader (it fetches the exact current Workshop version of every mod in a
+  config). The dashboard drives it, trims the queue and restarts it if it dies.
+- **Live server browser**: search servers by name, expand one to see its full
+  modlist with exact sizes and what you already have, and **Add server** to
+  queue only its missing mods at the end of the running batch.
+- **Per-server mod status**: ✓ installed, ⟳ downloading, • missing, plus
+  **Queue first** (that server's missing mods download before the rest) and
+  **Make preset**.
+- **Client install**: finished mods are copied automatically into
+  `Documents\My Games\ArmaReforger\addons`, which is what the game reads.
+- **Verify mods**: checks every mod against its Workshop size.
+- **Refresh all**: rescans the disk and re-pulls the modlist of every tracked
+  server.
+- **Presets**: writes a launcher preset for a server into the game's settings,
+  containing the mods that are actually installed.
 
-## What the dashboard does
+## Requirements
 
-- **Progress card**: bytes (exact), speed, ETA, active downloads, mods assembled.
-- **Server browser**: search live servers (reforgermods.net API), expand a row
-  to see its full modlist with on-disk markers and exact sizes, **Add server**
-  queues its missing mods at the END of the running batch (never jumps the
-  queue) and restarts the downloader.
-- **Refresh all** (Servers card): rescans the disk and pulls a fresh modlist for
-  every tracked server. Counts become real; the batch itself (the size map) is
-  not changed.
-- Every action runs silently and reports in the status line under the buttons:
-  no browser prompts.
-- **Servers**: every tracked server with per-mod ✓/⟳/• status, sizes, per-server
-  **Queue first** (reorders missing mods to the front, batch continues behind)
-  and **Make preset** (builds an in-game launcher preset; game must be closed).
-- **Verify mods**: size-checks every assembled mod against the Workshop.
+1. Windows with PowerShell 5.1.
+2. **Arma Reforger** installed (the game).
+3. The **Arma Reforger dedicated server** files, used only as a downloader.
+   Install with [SteamCMD](https://developer.valvesoftware.com/wiki/SteamCMD):
+   `app_update 1874880 validate`, then put that install in `armar-server\` next
+   to the scripts (the folder must contain `ArmaReforgerServer.exe`).
 
-"Completed" means one thing everywhere: all 3 assembly files present + folder
-quiet 2 min + size matches Workshop ±2%. `sync-addons.ps1` mirrors exactly that
-set into `Documents\My Games\ArmaReforger\addons` (single-instance mutex).
+## First run
+
+1. Double-click **`Start Mods Download.cmd`**. The dashboard opens at
+   http://localhost:8123 and empty state files are created in `data\`.
+2. In the **Server browser**, search for a server and press **Add server**.
+   Its mods are queued.
+3. Press **Start / Resume**. Downloads begin; finished mods appear in the game's
+   addons folder automatically.
+4. When everything is installed, press **Make preset** on a server to get a
+   launcher preset with exactly those mods.
 
 ## Layout
 
 | Path | What |
 | --- | --- |
-| `download-web.ps1` | the program (HTTP dashboard + DS control + browser) |
-| `sync-addons.ps1` | mirrors completed mods to the client addon folder |
-| `make-preset.ps1` | launcher preset builder (`-ServerId <guid>`) |
-| `trim-config.ps1` | trims the DS config to un-downloaded mods (auto on every start) |
-| `add-server.ps1` | CLI variant of Add server (`-Id <guid>` or `-Search <text>`) |
-| `get-sizes.ps1` | resolve exact sizes for config mods (merge-only) |
-| `fix-sizes.ps1` | fill unknown sizes via `/v2/mods/{id}` (rate-limited) |
-| `test-rules.ps1` | asserts the live completion rule against disk |
-| `migrate-here.ps1` | one-shot: move big data from `Documents\ArmaReforger-DL` into this folder |
-| `data\*.json` | state: server list, DS config, exact size map |
-| `serverprofile\` | DS download destination (created at runtime, gitignored) |
-| `armar-server\` | ArmaReforgerServer.exe + its install (gitignored) |
-| `docs\reforgermods-api-v2.md` | full offline copy of the public API reference |
+| `download-web.ps1` | the program (dashboard, server browser, downloader control) |
+| `sync-addons.ps1` | copies finished mods into the game's addons folder |
+| `make-preset.ps1` | builds a launcher preset (`-ServerId <guid>`) |
+| `trim-config.ps1` | removes already-downloaded mods from the DS config (automatic on every start) |
+| `add-server.ps1` | command-line variant of Add server (`-Id <guid>` or `-Search <text>`) |
+| `get-sizes.ps1` | resolves exact Workshop sizes for the queued mods (merge-only) |
+| `fix-sizes.ps1` | fills any size the planner could not resolve |
+| `test-rules.ps1` | asserts the completion rule against disk, and checks the served page |
+| `data\` | state: tracked servers, downloader config, exact sizes (created on first run) |
+| `serverprofile\` | where the dedicated server writes the downloads (created at runtime) |
+| `armar-server\` | the dedicated server install you provide |
+| `docs\reforgermods-api-v2.md` | offline copy of the reforgermods.net API reference |
 
-## First run on a fresh machine
+## Where things are stored
 
-1. Put the dedicated server binary in `armar-server\` (steamcmd:
-   `app_update 1874880` — the old `steamcmd\` folder from an existing
-   installation works; or copy `armar-server\` from any existing setup).
-2. Fill `data\batch1-servers.json` (one capture per server) or start empty.
-3. Start the dashboard, use the server browser to add servers, press
-   **Start / Resume**.
+Everything is relative to this folder. Two environment variables move the big
+parts (optional):
 
-## Paths (portable by default, overridable)
+- `RFMM_HOME` — where `serverprofile\`, `armar-server\` and `steamcmd\` live
+- `RFMM_DATA` — where the `data\` json files live
 
-Everything is relative to this folder. Two env vars relocate the big data:
+Leave them unset and everything stays inside this folder. That is also how you
+keep two independent setups on one machine.
 
-- `RFMM_HOME` — where `serverprofile\`, `armar-server\`, `steamcmd\` live
-- `RFMM_DATA` — where the `data\` json state lives
+## How "installed" is decided
 
-Unset = this folder. On this machine they are set by the Desktop .cmd until
-`migrate-here.ps1` has moved the folders in here.
+A mod counts as installed when there is a folder with its id whose files match
+the Workshop size (±2 %) and which has not been written to for 2 minutes. The
+three assembly files (`addon.gproj`, `meta`, `resourceDatabase.rdb`) are only
+required when the size is unknown — many Workshop mods ship without
+`addon.gproj`, and requiring it left finished mods unsynced.
 
-## Traps baked into the code (do not remove)
+The dashboard, the queue trimming, the client copy and `test-rules.ps1` all use
+this one rule.
 
-- **1 MB download-list limit**: the DS insta-crashes ~30 s after a false
-  "started" when the config holds ~600+ mods. `Start-DS` therefore always runs
-  `trim-config.ps1` first, waits 25 s, and retries once.
-- **Merge-only sizes**: `batch1-sizes.json` holds sizes of everything already
-  downloaded (the config is trimmed). Never replace it, only merge.
-- **Presets go inside `SCR_WorkshopAddonManagerPresetStorage`** after
-  `m_iVersion 1`, GUIDs quoted `"{...}"`. A block appended after the storage is
-  dropped by the game. Only installed mods are included: the launcher deletes
-  preset entries it cannot resolve, which would poison the whole preset.
-- **PowerShell is case-insensitive + dynamically scoped**: never name a local
-  variable `$cfg`/`$Cfg` (it shadows the `-config` path and reaches `Start-DS`).
-- The DS writes `addon.gproj`/`meta`/`resourceDatabase.rdb` BEFORE the data
-  paks, so "3 files present" alone is not completion (size must match).
+## Traps the code handles (do not "simplify" them away)
 
-## Environment notes
+- **The DS has a ~1 MB download-list limit**: with several hundred mods in the
+  config it reports "started" and crashes ~30 s later. Every start therefore
+  trims the config first, waits 25 s and retries once.
+- **Sizes are merged, never replaced**: the config is trimmed to the remaining
+  mods, so a replace would destroy the sizes of everything already downloaded.
+- **Presets go inside `m_aPresets { }`** of
+  `SCR_WorkshopAddonManagerPresetStorage`, GUIDs quoted. A preset written
+  anywhere else in the conf is dropped by the game on the next save. Only mods
+  that are installed are included: the launcher deletes entries it cannot
+  resolve, which poisons the whole preset.
+- **PowerShell is case-insensitive**: never name a local variable `$cfg`/`$Cfg`
+  or it shadows the script's `$Cfg` path and leaks into other functions.
+- **Mod folders can legitimately lack `addon.gproj`** (8-file dev packs). The
+  completion rule must stay size-based for those.
 
-- `reforgermods.net` free API tier: 60 req/min, 5 000/day (no key). The tools
-  endpoints need no key. Full reference in `docs\reforgermods-api-v2.md`.
-- The dashboard binds to `localhost:8123` only, and every state-changing
-  endpoint requires a per-run token (CSRF protection) that the built-in page
-  carries automatically.
-- Mods appear in-game only after the game restarts.
+## Tests
+
+```powershell
+powershell -File test-rules.ps1        # with the dashboard running
+```
+
+It checks the completion rule against disk, detects partial folders that are not
+queued (orphans), and validates the page's JavaScript with `node --check` when
+node is installed.
+
+## API
+
+`reforgermods.net` free tier: 60 requests/minute, no key needed.
+Full reference: `docs\reforgermods-api-v2.md`.

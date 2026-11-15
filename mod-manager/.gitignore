@@ -3,3 +3,4 @@ serverprofile/
 armar-server/
 steamcmd/
 *.log
+data/

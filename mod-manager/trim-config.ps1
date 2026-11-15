@@ -15,16 +15,21 @@ if (Test-Path $sp) { foreach ($p in (Get-Content $sp -Raw | ConvertFrom-Json).mo
 # writes them before the paks, so a partial download looks assembled.
 # Marker-only folders with a known size would otherwise be trimmed out of the
 # config and never re-downloaded.
+# same completion rule as Get-HaveIds: size is authoritative when known; markers
+# only for mods whose size we never resolved (several Workshop mods ship without
+# addon.gproj, so a marker test alone would trim them out and re-download forever)
 Get-ChildItem $addons -Directory -ErrorAction SilentlyContinue |
   Where-Object { $_.Name -match '_([0-9A-F]{16})$' } |
   ForEach-Object {
     $files = Get-ChildItem $_.FullName -File -ErrorAction SilentlyContinue
-    if (($files | Where-Object { $_.Name -in 'addon.gproj','meta','resourceDatabase.rdb' }).Count -ne 3) { return }
     $id = $Matches[1]
     $exp = if ($sizes[$id]) { $sizes[$id] } else { 0 }
-    if (-not $exp) { $done[$id] = $true; return }   # unknown size: keep old marker-only rule
-    $bytes = ($files | Measure-Object Length -Sum).Sum
-    if ([Math]::Abs($bytes - $exp) -le [Math]::Max(2MB, 0.02 * $exp)) { $done[$id] = $true }
+    if ($exp) {
+      $bytes = ($files | Measure-Object Length -Sum).Sum
+      if ([Math]::Abs($bytes - $exp) -le [Math]::Max(2MB, 0.02 * $exp)) { $done[$id] = $true }
+    } elseif (($files | Where-Object { $_.Name -in 'addon.gproj','meta','resourceDatabase.rdb' }).Count -eq 3) {
+      $done[$id] = $true
+    }
   }
 "assembled on disk: $($done.Count)"
 
