@@ -198,23 +198,26 @@ function Get-HaveIds {
 }
 
 function Invoke-QueueServer([string]$Id) {
-  # reorder the queue: this server's missing mods download first, the rest of
-  # the batch follows unchanged - nothing is dropped or paused
+  # this server's missing mods download first, then the rest of the batch as a
+  # full deterministic rebuild (every batch mod not on disk) - never a stale
+  # leftover config, so the order after the server's mods is stable
   $srv = @($serverList | Where-Object { $_.id -eq $Id })[0]
   if (-not $srv) { throw 'unknown server id' }
   $name = if ($srv.PSObject.Properties['key'] -and $srv.key) { [string]$srv.key } else { ([string]$srv.name -split '\|')[0].Trim() }
   $have = Get-HaveIds
   $first = @($srv.mods | Where-Object { -not $have.ContainsKey($_.id) } |
     ForEach-Object { [PSCustomObject]@{ modId = $_.id; name = $_.name } })
-  if (-not $first) { return "nothing to do - all $($srv.mods.Count) mods are already on disk" }
-  $j = Get-Content $Cfg -Raw | ConvertFrom-Json
+  if (-not $first) { return "nothing to do - all $($srv.mods.Count) mods of '$name' are already installed" }
   $ids = @($first | ForEach-Object { $_.modId })
-  $rest = @($j.game.mods | Where-Object { $ids -notcontains $_.modId })
+  $rest = @($sizeMap.Keys | Where-Object { -not $have.ContainsKey($_) -and $ids -notcontains $_ } |
+    ForEach-Object { [PSCustomObject]@{ modId = $_; name = [string]$sizeMap[$_].name } })
+  $j = Get-Content $Cfg -Raw | ConvertFrom-Json
   $j.game.mods = @($first + $rest)
   $j | ConvertTo-Json -Depth 5 | Set-Content $Cfg -Encoding UTF8
   Stop-DS | Out-Null
   $r = Start-DS
-  "queue reordered: $($first.Count) missing mods of '$name' download first, the other $($rest.Count) pending mods follow ($r)"
+  $already = @($srv.mods).Count - $first.Count
+  "queue: $($first.Count) missing mods of '$name' download first, then the other $($rest.Count) batch mods follow ($already of $($srv.mods.Count) already installed) ($r)"
 }
 
 function Invoke-ResumeBatch {
@@ -380,11 +383,14 @@ async function browse(){
 function renderBrowse(){
  const el=document.getElementById('bs');
  if(!BR||!BR.length){el.innerHTML='<span class="dim">no servers found</span>';return;}
- el.innerHTML=BR.map(v=>
-  '<details ontoggle="bsToggle(this,\''+v.id+'\')"><summary>'+esc(v.name)+
-  ' <span class="dim">'+v.players+'/'+v.maxPlayers+(v.online?'':' &middot; offline')+' &middot; '+v.modCount+' mods</span>'+
+ el.innerHTML=BR.map(v=>{
+  const pl=v.players+'/'+v.maxPlayers+' players';
+  const md=v.haveCount>=0 ? v.haveCount+'/'+v.totalMods+' on disk' : v.modCount+' mods';
+  return '<details ontoggle="bsToggle(this,\''+v.id+'\')"><summary>'+esc(v.name)+
+  ' <span class="dim">'+pl+(v.online?'':' &middot; offline')+' &middot; '+md+'</span>'+
   '<button class="mini" onclick="addSrv(\''+v.id+'\',event)">Add server</button></summary>'+
   '<div class="bs" data-id="'+v.id+'"><span class="dim">loading modlist...</span></div></details>').join('');
+ })
 }
 function bsToggle(d,id){ if(d.open&&!d.dataset.l){d.dataset.l=1;loadBS(id,d);} }
 async function loadBS(id,d){
@@ -525,7 +531,21 @@ while ($l.IsListening) {
         $ctx.Response.OutputStream.Write($b, 0, $b.Length)
       }
       '/browse' {
-        $b = [Text.Encoding]::UTF8.GetBytes((@{ servers = (Get-Browse $ctx.Request.QueryString['q']) } | ConvertTo-Json -Depth 4 -Compress))
+        $have = Get-HaveIds
+        $tracked = @{}
+        foreach ($sv in $serverList) { $tracked[$sv.id] = $sv }
+        $rows = @(Get-Browse $ctx.Request.QueryString['q'] | ForEach-Object {
+          # tracked servers get a real on-disk count; others only the API's total
+          $haveCount = -1; $total = $_.modCount
+          if ($tracked.ContainsKey($_.id)) {
+            $mods = @($tracked[$_.id].mods)
+            $haveCount = @($mods | Where-Object { $have.ContainsKey($_.id) }).Count
+            $total = $mods.Count
+          }
+          [PSCustomObject]@{ id = $_.id; name = $_.name; players = $_.players; maxPlayers = $_.maxPlayers
+                             region = $_.region; online = $_.online; modCount = $_.modCount
+                             scenarioName = $_.scenarioName; haveCount = $haveCount; totalMods = $total } })
+        $b = [Text.Encoding]::UTF8.GetBytes((@{ servers = $rows } | ConvertTo-Json -Depth 4 -Compress))
         $ctx.Response.ContentType = 'application/json'
         $ctx.Response.OutputStream.Write($b, 0, $b.Length)
       }
