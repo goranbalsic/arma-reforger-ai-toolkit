@@ -214,10 +214,7 @@ function Get-Status {
   }
   $doneCount = @($sizeMap.Keys | Where-Object { $completed.ContainsKey($_) -or $clSet.ContainsKey($_) }).Count
 
-  # active = folders still changing, newest first (up to 3)
-  # The DS writes fragments into <mod>\temp\ and consolidates them later, so the
-  # folder total dips mid-download. Keep a high-water mark per mod (and take the
-  # DS's own reported MB when it is ahead) so the bar only ever moves forward.
+  # active = every folder currently being written (no cap: the page shows all)
   $logProgress = @{}
   $lgNow = Get-Log
   if ($lgNow) {
@@ -228,7 +225,7 @@ function Get-Status {
   }
   $active = @($dirs.GetEnumerator() |
     Where-Object { -not $completed.ContainsKey($_.Key) -and $_.Value.bytes -gt 0 -and $_.Value.mtime -gt $now.AddMinutes(-5) } |
-    Sort-Object { $_.Value.mtime } -Descending | Select-Object -First 3) | ForEach-Object {
+    Sort-Object { $_.Value.mtime } -Descending) | ForEach-Object {
     $sm = $sizeMap[$_.Key]; $exp = if ($sm) { [double]$sm.bytes } else { 0 }
     $b = [double]$_.Value.bytes
     if ($logProgress.ContainsKey($_.Value.name) -and $logProgress[$_.Value.name] -gt $b) { $b = $logProgress[$_.Value.name] }
@@ -249,13 +246,17 @@ function Get-Status {
     @{ id = $_.Key; name = $_.Value.name; b = [double]$_.Value.bytes }
   }
 
+  $queueList = @()
+  try { $queueList = @((Get-Content $Cfg -Raw | ConvertFrom-Json).game.mods |
+        ForEach-Object { @{ id = $_.modId; name = $_.name } }) } catch { }
+
   @{ running = [bool](Get-DS); speedB = $sp.b; speedAge = $sp.age
      doneB = [double]$doneBytes; totalB = [double]$TotalBytes
      pct = if ($TotalBytes -gt 0) { [Math]::Min(100, [int](100 * $doneBytes / $TotalBytes)) } else { 0 }
      pctF = if ($TotalBytes -gt 0) { [Math]::Round([Math]::Min(100, 100 * $doneBytes / $TotalBytes), 2) } else { 0 }
      doneCount = $doneCount; totalMods = $sizeMap.Count
      active = @($active); recent = @($recent); cl = $clIds; failed = (Get-SkippedNames)
-     tok = $token; verify = $verify }
+     queue = @($queueList); tok = $token; verify = $verify }
 }
 
 if ($Check) {
@@ -563,6 +564,11 @@ $html = @'
  details.card>summary{list-style:none}
  details.card>summary::-webkit-details-marker{display:none}
  details.card>summary h2{display:inline;margin:0}
+ details.card>summary::before{content:'\25B8';display:inline-block;width:14px;color:#8a8e98}
+ details.card[open]>summary::before{content:'\25BE'}
+ .cols{display:flex;gap:14px;max-width:760px;margin:0 auto 14px;align-items:flex-start}
+ .cols>.card{flex:1;margin:0;min-width:0}
+ #queue ol{margin:0;padding-left:22px;font-size:13px;line-height:1.6}
  #srv ul,#bs ul{margin:4px 0 0 16px}
  #bs .bs{margin:4px 0 0 16px}
  .ok{color:#7ed07e} .warn{color:#e0b13e} .bad{color:#e06c6c} .dim{color:#8a8e98}
@@ -585,11 +591,14 @@ $html = @'
  <div id="say" class="dim" style="margin-top:10px;font-size:13px;min-height:18px"></div>
  <div id="failed" class="bad" style="font-size:13px;margin-top:4px"></div>
 </div>
-<div class="card" id="actcard" style="display:none"><h2 style="font-size:15px;margin:0 0 8px;color:#fff">Downloading now</h2><div id="act"></div></div>
-<div class="card"><h2 style="font-size:15px;margin:0 0 8px;color:#fff">Server browser <span class="dim">live</span></h2>
- <div><input id="bq" placeholder="search servers (e.g. PVE, Cold Front, Vietnam)..." oninput="browseCleared()" onkeydown="if(event.key==='Enter')browse()"><button onclick="browse()">Search</button></div>
- <div id="bs" class="dim" style="margin-top:8px">type something and hit Search to list live servers</div>
+<div class="cols">
+ <details class="card" open><summary><h2 style="font-size:15px;color:#fff">Queue <span id="qcount" class="dim"></span></h2></summary><div id="queue" class="dim" style="margin-top:8px">-</div></details>
+ <details class="card" open><summary><h2 style="font-size:15px;color:#fff">Downloading now <span id="actcount" class="dim"></span></h2></summary><div id="act" style="margin-top:8px"></div></details>
 </div>
+<details class="card" open><summary><h2 style="font-size:15px;color:#fff">Server browser <span class="dim">live</span></h2></summary>
+ <div style="margin-top:8px"><input id="bq" placeholder="search servers (e.g. PVE, Cold Front, Vietnam)..." oninput="browseCleared()" onkeydown="if(event.key==='Enter')browse()"><button onclick="browse()">Search</button></div>
+ <div id="bs" class="dim" style="margin-top:8px">type a server name and press Enter</div>
+</details>
 <details class="card" open><summary><h2 style="font-size:15px;color:#fff">Servers <span id="srvcount" class="dim"></span><button class="mini" onclick="refreshSrv(event)" title="re-read disk + pull fresh modlists from reforgermods.net">Refresh all</button></h2></summary><div id="srv" class="dim" style="margin-top:8px">loading server lists...</div></details>
 <details class="card"><summary><h2 style="font-size:15px;color:#fff">Completed <span id="reccount" class="dim"></span></h2></summary><ul id="rec"></ul></details>
 <script>
@@ -677,19 +686,23 @@ async function tick(){
   document.getElementById('cnt').textContent=s.doneCount+' / '+s.totalMods+' mods assembled';
   const eta=(s.speedB>51200)?left((s.totalB-s.doneB)/s.speedB):'--';
   document.getElementById('etabox').textContent=eta;
-  const ac=document.getElementById('actcard');
-  if(s.active.length){ac.style.display='block';
-   document.getElementById('act').innerHTML=s.active.map(a=>
-    '<div class="row"><span>'+esc(a.name)+'</span><span class="dim">'+(a.expB>0?(sz(a.b)+' / '+sz(a.expB)):sz(a.b)+' (dependency, size unknown)')+'</span></div>'+
-    (a.expB>0?'<div class="bar amber"><div style="width:'+a.pct+'%"></div></div>':'')).join('');
-  } else ac.style.display='none';
+  document.getElementById('actcount').textContent=s.active.length?'('+s.active.length+')':'';
+  document.getElementById('act').innerHTML=s.active.length
+   ?s.active.map(a=>
+    '<div class="row"><span>'+esc(a.name)+'</span><span class="dim">'+(a.expB>0?(sz(a.b)+' / '+sz(a.expB)):sz(a.b)+' (size unknown)')+'</span></div>'+
+    (a.expB>0?'<div class="bar amber"><div style="width:'+a.pct+'%"></div></div>':'')).join('')
+   :'<span class="dim">nothing downloading right now</span>';
   const D={},A={},B={};
   s.recent.forEach(r=>{D[r.id]=1;B[r.id]=r.b});
   s.active.forEach(a=>{A[a.id]=1});
   (s.cl||[]).forEach(id=>{D[id]=1});   // installed client-side before the batch counts as on disk
-  const key=s.recent.length+'|'+(s.cl||[]).length+'|'+s.active.map(a=>a.id).join(',');
+  const key=s.recent.length+'|'+(s.cl||[]).length+'|'+(s.queue||[]).length+'|'+s.active.map(a=>a.id).join(',');
   if(key!==lastKey){          // lists only re-render when something actually finished/started
    lastKey=key;
+   document.getElementById('qcount').textContent='('+((s.queue||[]).length)+')';
+   document.getElementById('queue').innerHTML=(s.queue||[]).length
+    ?'<ol>'+s.queue.map(q=>'<li>'+(A[q.id]?'<span class="warn">&#10227;</span> ':'')+esc(q.name)+'</li>').join('')+'</ol>'
+    :'<span class="dim">queue is empty</span>';
    document.getElementById('reccount').textContent='('+s.recent.length+')';
    document.getElementById('rec').innerHTML=s.recent.length
     ?s.recent.map(r=>'<li class="ok">&#10003; '+esc(r.name)+' <span class="dim">'+sz(r.b)+'</span></li>').join('')
