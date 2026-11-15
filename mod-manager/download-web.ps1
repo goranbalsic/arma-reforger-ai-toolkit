@@ -127,7 +127,7 @@ function Get-Status {
      doneB = [double]$doneBytes; totalB = [double]$TotalBytes
      pct = [Math]::Min(100, [int](100 * $doneBytes / $TotalBytes))
      doneCount = $doneCount; totalMods = $sizeMap.Count
-     active = @($active); recent = @($recent); cl = (Get-ClientIds); verify = $verify }
+     active = @($active); recent = @($recent); cl = (Get-ClientIds); tok = $token; verify = $verify }
 }
 
 if ($Check) {
@@ -351,7 +351,7 @@ $html = @'
 <div class="card"><h2 style="font-size:15px;margin:0 0 4px;color:#fff">Servers <span id="srvcount" class="dim"></span></h2><div id="srv" class="dim">loading server lists...</div></div>
 <div class="card"><h2 style="font-size:15px;margin:0 0 4px;color:#fff">Completed <span id="reccount" class="dim"></span></h2><ul id="rec"></ul></div>
 <script>
-const T='__T__';
+let T='__T__';   // refreshed from /status so an open page survives dashboard restarts
 function esc(x){return String(x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 function sz(b){return b>=1073741824?(b/1073741824).toFixed(2)+' GB':b>=1048576?(b/1048576).toFixed(1)+' MB':b>=1024?(b/1024).toFixed(1)+' KB':Math.round(b)+' B'}
 let SRV=null,BR=null,lastKey='';
@@ -413,6 +413,7 @@ async function tick(){
  try{
   if(!SRV)loadSrv();
   const s=await (await fetch('/status')).json();
+  if(s.tok)T=s.tok;
   const boot=document.getElementById('boot'); if(boot)boot.remove();
   document.getElementById('st').innerHTML=s.running
     ?'<span class="dot" style="background:#4cc35e"></span><span class="ok">running</span>'
