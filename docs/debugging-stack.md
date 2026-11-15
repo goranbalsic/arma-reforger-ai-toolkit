@@ -23,11 +23,19 @@ tests catch behaviour, CI enforces both. Keep the agent as a fast first pass.
 
 | Tool | Repo | What it catches | Run |
 | --- | --- | --- | --- |
-| Semgrep | [semgrep/semgrep](https://github.com/semgrep/semgrep) | security patterns across languages, taint-style rules, secrets | `uvx semgrep --config p/ci --config p/powershell --config p/python .` |
+| Semgrep | [semgrep/semgrep](https://github.com/semgrep/semgrep) | security patterns across languages, taint-style rules, secrets | `uvx semgrep --config p/ci --config p/secrets --config p/python .` |
 | Trivy | [aquasecurity/trivy](https://github.com/aquasecurity/trivy) | dependency CVEs, secrets, IaC misconfig in a folder | `trivy fs --scanners vuln,secret,misconfig .` |
 | osv-scanner | [google/osv-scanner](https://github.com/google/osv-scanner) | dependency CVEs via OSV (alternative to Trivy) | `osv-scanner --lockfile=<file> .` |
 
 Notes:
+- **There is no `p/powershell` ruleset** (it returns HTTP 404). Use `p/ci`,
+  `p/secrets`, `p/python`; `p/default` also works.
+- Trivy downloads a ~100 MB vulnerability DB on first use. On a slow link this
+  times out (`failed to download vulnerability DB`) and is **not** a code
+  finding - run it when the link is idle, or use `osv-scanner` instead.
+- This repo has no dependency manifests (PowerShell + Python stdlib), so
+  Trivy/osv-scanner mostly matter for the C# WPF app and its NuGet packages
+  (`dotnet list package --vulnerable`).
 - Trivy's GitHub Action was compromised twice in March 2026. Pin the action to a
   **commit SHA**, never `@v1`/`@master`, and install the CLI from a pinned release.
 - Semgrep's standalone MCP repo (`semgrep/mcp`) is **deprecated**; the server now
@@ -123,12 +131,15 @@ read-only where possible, and never paste secrets into the config - use
 
 | Tool | Version | Status |
 | --- | --- | --- |
-| PSScriptAnalyzer | 1.25.0 | installed (CurrentUser) |
+| PSScriptAnalyzer | 1.25.0 | installed (PS7 path, loads in 5.1) |
 | ruff | 0.17.5 | installed via `uv tool` (`~\.local\bin`) |
-| gitleaks | installed | via winget |
+| gitleaks | 8.30.1 | via winget |
+| semgrep | 1.185.0 | via `uv tool` |
+| semgrep-mcp | - | installing via `uv tool install semgrep-mcp` |
+| trivy | 0.76.2 | via winget; vulnerability DB download times out on this link |
+| osv-scanner | 2.7.0 | via winget; `api.osv.dev` is unreachable from this network |
 | python | 3.14 | installed |
 | node | 24.x | installed |
 | uv | installed | used for `uvx semgrep` / `semgrep-mcp` |
 | dotnet | installed | for the WPF app |
-| semgrep, trivy, osv-scanner | - | not installed; commands above |
 | Pester | 3.4.0 | old; `Install-Module Pester -Force -SkipPublisherCheck` for v5 |

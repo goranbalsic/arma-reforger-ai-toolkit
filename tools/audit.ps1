@@ -58,17 +58,28 @@ if ($Deep) {
     $sg = Get-Command semgrep -ErrorAction SilentlyContinue
     if (-not $sg -and (Test-Path "$env:USERPROFILE\.local\bin\semgrep.exe")) { $sg = Get-Item "$env:USERPROFILE\.local\bin\semgrep.exe" }
     if ($sg) {
-        & $sg.Source --config p/ci --config p/powershell --config p/python --quiet --error --exclude .git --exclude context --exclude work $repo 2>&1 |
-            Select-Object -Last 20 | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
-        if ($LASTEXITCODE -ne 0) { $fail++ }
+        # p/powershell does NOT exist on the registry (404) - these do
+        $out = & $sg.Source --config p/ci --config p/secrets --config p/python --quiet --error --exclude .git --exclude context --exclude work $repo 2>&1
+        $code = $LASTEXITCODE
+        if ($out) { $out | Select-Object -Last 20 | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow } }
+        if ($code -eq 0) { Write-Host '  clean' -ForegroundColor Green }
+        elseif ($code -eq 1) { Write-Host '  findings above' -ForegroundColor Red; $fail++ }
+        else { Write-Host "  semgrep could not run (exit $code - rule download or config error)" -ForegroundColor Red; $fail++ }
     } else { Write-Host '  skipped (uv tool install semgrep)' -ForegroundColor DarkGray }
 
     Section 'trivy (dependencies / secrets)'
     $tv = Get-Command trivy -ErrorAction SilentlyContinue
     if ($tv) {
-        & $tv.Source fs --quiet --scanners vuln,secret --skip-dirs .git --skip-dirs context --skip-dirs work $repo 2>&1 |
-            Select-Object -Last 20 | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
-        if ($LASTEXITCODE -ne 0) { $fail++ }
+        $env:TRIVY_DB_REPOSITORY = 'ghcr.io/aquasecurity/trivy-db'
+        $out = & $tv.Source fs --quiet --scanners vuln,secret --timeout 5m --skip-dirs .git --skip-dirs context --skip-dirs work $repo 2>&1
+        $code = $LASTEXITCODE
+        if ($out) { $out | Select-Object -Last 20 | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow } }
+        if ($code -eq 0) { Write-Host '  clean' -ForegroundColor Green }
+        elseif ($out -match 'failed to download vulnerability DB|DB error') {
+            # ~100 MB OCI artifact; on a slow link this times out. Not a code finding.
+            Write-Host '  skipped: vulnerability DB not downloaded (slow link). Run `trivy fs --download-db-only`. ' -ForegroundColor DarkGray
+        }
+        else { $fail++ }
     } else { Write-Host '  skipped (winget install aquasecurity.trivy)' -ForegroundColor DarkGray }
 }
 
