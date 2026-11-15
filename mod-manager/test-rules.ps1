@@ -50,5 +50,17 @@ Get-ChildItem $ds -Directory -ErrorAction SilentlyContinue |
       }
     }
   }
+# the served page script must be syntactically valid: one stray bracket leaves
+# the whole page stuck at "connecting to dashboard..." (that happened)
+if (Get-Command node -ErrorAction SilentlyContinue) {
+  $page = (Invoke-WebRequest 'http://localhost:8123/' -UseBasicParsing -TimeoutSec 30).Content
+  $js = [regex]::Match($page, '(?s)<script>(.*)</script>').Groups[1].Value
+  $tmpJs = Join-Path $env:TEMP 'rfmm-page.js'
+  Set-Content $tmpJs $js -Encoding UTF8
+  node --check $tmpJs 2>&1 | Out-Null
+  if ($LASTEXITCODE -ne 0) { 'FAIL dashboard page has a JavaScript syntax error'; $fail++ }
+  else { 'page JS: syntax ok' }
+} else { 'note: node not available - page JS syntax not checked' }
+
 "checked $($s.recent.Count) completed mods, failures: $fail"
 if ($fail) { exit 1 } else { 'OK' }

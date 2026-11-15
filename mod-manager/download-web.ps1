@@ -401,8 +401,8 @@ function renderBrowse(){
   return '<details ontoggle="bsToggle(this,\''+v.id+'\')"><summary>'+esc(v.name)+
   ' <span class="dim">'+pl+(v.online?'':' &middot; offline')+' &middot; '+md+'</span>'+
   '<button class="mini" onclick="addSrv(\''+v.id+'\',event)">Add server</button></summary>'+
-  '<div class="bs" data-id="'+v.id+'"><span class="dim">loading modlist...</span></div></details>').join('');
- })
+  '<div class="bs" data-id="'+v.id+'"><span class="dim">loading modlist...</span></div></details>';
+ }).join('');
 }
 function bsToggle(d,id){ if(d.open&&!d.dataset.l){d.dataset.l=1;loadBS(id,d);} }
 async function loadBS(id,d){
