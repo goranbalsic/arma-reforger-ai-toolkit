@@ -13,6 +13,7 @@ import glob
 import json
 import os
 import re
+import shutil
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'skill', 'arma-reforger-modding', 'scripts'))
@@ -171,8 +172,9 @@ def cmd_index():
 
     # human-readable index
     names = [p['name'] for p in presets]
-    seta = {m['guid'] for m in presets[0]['mods']}
-    setb = {m['guid'] for m in presets[1]['mods']}
+    # a fresh install has a single preset - indexing must not assume two
+    seta = {m['guid'] for m in presets[0]['mods']} if presets else set()
+    setb = {m['guid'] for m in presets[1]['mods']} if len(presets) > 1 else set()
     only_a = [defs.get(g, {'name': g})['name'] for g in sorted(seta - setb)]
     only_b = [defs.get(g, {'name': g})['name'] for g in sorted(setb - seta)]
     total_files = sum(d['files'] for d in defs.values())
@@ -183,7 +185,7 @@ def cmd_index():
         ok = sum(1 for m in p['mods'] if m['installed'])
         lines.append('| %s | %d | %d |' % (p['name'], len(p['mods']), ok))
     lines += ['', '## Preset differences', '',
-              '**Only in %s:** %s' % (names[0], ', '.join(only_a) or '(none)'), '',
+              '**Only in %s:** %s' % (names[0] if names else '-', ', '.join(only_a) or '(none)'), '',
               '**Only in %s:** %s' % (names[1] if len(names) > 1 else '-', ', '.join(only_b) or '(none)'), '',
               '## Addons', '',
               '%d addons, %d files, %.2f GB uncompressed.' % (len(defs), total_files,
@@ -219,6 +221,8 @@ def cmd_extract(which):
         guids = [m['guid'] for m in p['mods'] if m['installed']]
         label = p['name']
     outroot = os.path.join(WORK, re.sub(r'[^A-Za-z0-9]+', '-', label).strip('-'))
+    if os.path.isdir(outroot):
+        shutil.rmtree(outroot)   # stale files from an earlier extract would mix versions
     plan = []
     for guid in guids:
         d = defs[guid]
@@ -233,10 +237,13 @@ def cmd_extract(which):
         p = Pak(pak)
         dest = os.path.join(outroot, d['folder'])
         n = 0
+        root_abs = os.path.abspath(outroot) + os.sep
         for e in p.entries:
             if e[0].lstrip('/') not in set(texts):
                 continue
-            full = os.path.join(dest, *e[0].strip('/').split('/'))
+            full = os.path.abspath(os.path.join(dest, *e[0].strip('/').split('/')))
+            if not full.startswith(root_abs):
+                continue   # a pak entry must never escape the output folder
             os.makedirs(os.path.dirname(full), exist_ok=True)
             with open(full, 'wb') as f:
                 f.write(p._payload(e))

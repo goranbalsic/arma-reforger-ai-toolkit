@@ -14,6 +14,7 @@ resource path:
 import argparse
 import os
 import re
+import shutil
 import struct
 import sys
 
@@ -68,9 +69,12 @@ def patch(rdb_path, mapping, dry_run=False):
             start = i + 1
             end = i + len(needle)
             # record must look like <path>\0 <u32> <u16> <8 bytes guid>
-            if data[end] != 0:
+            if end >= len(data) or data[end] != 0:
                 continue
             off = end + 1 + 4 + 2
+            if off + 8 > len(data):
+                suspicious.append(vpath)   # truncated tail: not a GUID slot
+                continue
             slot = data[off:off + 8]
             if slot == b'\x00' * 8:
                 data[off:off + 8] = bytes.fromhex(guid.strip('{}'))[::-1]
@@ -82,6 +86,7 @@ def patch(rdb_path, mapping, dry_run=False):
         if hits == 0:
             missing.append(vpath)
     if not dry_run:
+        shutil.copyfile(rdb_path, rdb_path + '.bak')   # this rewrites live bytes
         open(rdb_path, 'wb').write(data)
     return patched, missing, suspicious
 
@@ -118,8 +123,11 @@ def main():
                 print('  ', p)
             return 1
 
-    patched, missing, _ = patch(a.rdb, mapping, dry_run=a.check)
+    patched, missing, suspicious = patch(a.rdb, mapping, dry_run=a.check)
     print('patched %d/%d entries' % (patched, len(mapping)))
+    if suspicious:
+        print('skipped %d truncated candidates (not a GUID slot): %s'
+              % (len(suspicious), ', '.join(suspicious[:5])))
     if missing:
         print('not found in rdb: %d' % len(missing))
         for p in missing[:10]:

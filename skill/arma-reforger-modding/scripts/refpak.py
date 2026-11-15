@@ -159,11 +159,15 @@ def main(argv):
             wanted = {e.strip().lower() for e in argv[4].split(',') if e.strip()}
         p = Pak(pak_path)
         n = 0
+        root_abs = os.path.abspath(outdir) + os.sep
         for e in p.entries:
             vpath, off, stored, full, comp = e
             if wanted is not None and os.path.splitext(vpath)[1].lower() not in wanted:
                 continue
-            dest = os.path.join(outdir, *vpath.strip('/').split('/'))
+            dest = os.path.abspath(os.path.join(outdir, *vpath.strip('/').split('/')))
+            if not dest.startswith(root_abs):
+                print('skipping entry outside the output folder: %s' % vpath, file=sys.stderr)
+                continue   # a shipped pak must never write outside outdir
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             with open(dest, 'wb') as f:
                 f.write(p._payload(e))

@@ -16,7 +16,8 @@ param(
     [string]$CopyFrom = '',
     [switch]$PresetOnly,
     [bool]$CreateMeta = $true,
-    [switch]$NoPreset
+    [switch]$NoPreset,
+    [string]$ConfPath = ''   # for testing against a copy of the launcher conf
 )
 
 $ErrorActionPreference = 'Stop'
@@ -84,10 +85,12 @@ if ($NoPreset -or -not $Preset) {
 $running = Get-Process -Name 'ArmaReforgerSteam', 'ArmaReforgerServer' -ErrorAction SilentlyContinue
 if ($running) { throw 'Arma Reforger is running. Close it first or the preset edit is lost.' }
 
-$conf = Get-ChildItem (Join-Path $env:USERPROFILE 'Documents\My Games\ArmaReforger\profile\.save') `
-    -Directory -Filter 'app*_user*' | ForEach-Object {
-        Join-Path $_.FullName 'settings\ReforgerGameSettings.conf'
-    } | Where-Object { Test-Path $_ } | Select-Object -First 1
+$conf = if ($ConfPath) { $ConfPath } else {
+    Get-ChildItem (Join-Path $env:USERPROFILE 'Documents\My Games\ArmaReforger\profile\.save') `
+        -Directory -Filter 'app*_user*' | ForEach-Object {
+            Join-Path $_.FullName 'settings\ReforgerGameSettings.conf'
+        } | Where-Object { Test-Path $_ } | Select-Object -First 1
+}
 if (-not $conf) { throw 'ReforgerGameSettings.conf not found' }
 
 function Get-Hash16([string]$s) {
@@ -142,14 +145,28 @@ if (-not $block) {
 
     $newGuid = Get-Hash16 "preset:$Preset"
     $myEntry = "     SCR_WorkshopAddonPresetAddonMeta `"{$metaGuid}`" {`r`n      m_sGuid `"$Guid`"`r`n      m_sName `"$Title`"`r`n     }"
-    $body = "SCR_WorkshopAddonPreset `"{$newGuid}`" {`r`n" +
+    $body = "   SCR_WorkshopAddonPreset `"{$newGuid}`" {`r`n" +
             "    m_sName `"$Preset`"`r`n" +
             "    m_aAddonsMeta {`r`n" +
             "$inner`r`n" +
             "$myEntry`r`n" +
             "    }`r`n" +
             "   }"
-    $text = $text.TrimEnd() + "`r`n   " + $body + "`r`n"
+    # the preset MUST be a child of m_aPresets: a block written anywhere else in
+    # the conf is silently dropped on the game's next save (verified in game)
+    $mp = $text.IndexOf('m_aPresets')
+    if ($mp -ge 0) {
+        $text = $text.Insert($text.IndexOf('{', $mp) + 1, "`r`n" + $body)
+    } else {
+        $st = $text.IndexOf('SCR_WorkshopAddonManagerPresetStorage')
+        if ($st -lt 0) { throw 'preset storage block not found in conf' }
+        $iv = $text.IndexOf('m_iVersion 1', $st)
+        if ($iv -lt 0) { throw 'preset storage m_iVersion not found in conf' }
+        $text = $text.Insert($iv + 'm_iVersion 1'.Length, "`r`n  m_aPresets {`r`n" + $body + "`r`n  }")
+    }
+    $mpAfter = $text.IndexOf('m_aPresets')
+    $newAt = $text.IndexOf('SCR_WorkshopAddonPreset "{' + $newGuid + '}"')
+    if ($mpAfter -lt 0 -or $newAt -lt $mpAfter) { throw 'preset was not written inside m_aPresets - conf not saved' }
     $copied = ([regex]::Matches($inner, 'm_sGuid')).Count
     Write-Host "Created preset '$Preset' from '$CopyFrom' with $($copied + 1) addons" -ForegroundColor Green
 }

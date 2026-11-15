@@ -24,6 +24,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# -File cannot carry an array, so callers pass "a,b" - split it back
+$ExtraAddonsDir = @($ExtraAddonsDir | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 . (Join-Path $PSScriptRoot '..\skill\arma-reforger-modding\scripts\find-arma.ps1')
 $arma = Find-Arma
 if (-not $arma.Workbench) { throw 'Workbench not found (Arma Reforger Tools)' }

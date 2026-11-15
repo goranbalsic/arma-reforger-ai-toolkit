@@ -15,6 +15,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# -File cannot carry an array, so callers pass "a,b" - split it back
+$ExtraAddonsDir = @($ExtraAddonsDir | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 . (Join-Path $PSScriptRoot 'find-arma.ps1')
 if (-not $Workbench -or -not $GameAddons) {
     $arma = Find-Arma

@@ -60,9 +60,12 @@ Write-Host '== stamp build GUIDs ==' -ForegroundColor Cyan
 & $python $patchScript --rdb $rdb --map $GuidMap
 if ($LASTEXITCODE -ne 0) { throw 'stamping the build failed' }
 
-# 3. install locally (only real addon files - no publish leftovers)
+# 3. install locally (only real addon files - no publish leftovers).
+# the folder is rebuilt from scratch: a file dropped between builds would
+# otherwise stay behind and keep overriding the vanilla resource.
 $addons = Join-Path $env:USERPROFILE 'Documents\My Games\ArmaReforger\addons'
 $dest = Join-Path $addons "${Id}_${Guid}"
+Remove-Item $dest -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $dest | Out-Null
 foreach ($f in 'addon.gproj', 'data.pak', 'resourceDatabase.rdb', 'meta') {
     $src = Join-Path $Out $f
