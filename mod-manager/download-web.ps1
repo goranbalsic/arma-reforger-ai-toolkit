@@ -376,9 +376,10 @@ function Invoke-AddServer([string]$Id) {
   $sz.totalBytes = [double]$script:TotalBytes
   $sz | ConvertTo-Json -Depth 4 | Set-Content $Sizes -Encoding UTF8
 
-  # show the new server in the Servers card immediately
+  # show the new server in the Servers card immediately, and remember it
   $script:serverList = @($serverList) + @([PSCustomObject]@{ id = $Id; name = $s.name; mods = @($s.mods | ForEach-Object {
     [PSCustomObject]@{ id = $_.id; name = $_.name; e = [double]$_.size } }) })
+  @{ servers = $serverList } | ConvertTo-Json -Depth 6 | Set-Content $ServersPath -Encoding UTF8
 
   $gb = [Math]::Round(($new | ForEach-Object { [double]$_.size } | Measure-Object -Sum).Sum / 1GB, 2)
   Stop-DS | Out-Null

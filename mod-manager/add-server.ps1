@@ -17,6 +17,7 @@ $h = @{ 'User-Agent' = 'arma-reforger-ai-toolkit/1.0' }
 $base = 'https://api.reforgermods.net/v2'
 $cfgPath = "$Data\batch1-serverconfig.json"
 $sizesPath = "$Data\batch1-sizes.json"
+$serversPath = "$Data\batch1-servers.json"
 $dsAddons = "$Root\serverprofile\addons"
 $clAddons = "$env:USERPROFILE\Documents\My Games\ArmaReforger\addons"
 
@@ -71,3 +72,19 @@ $total = ($sizes.mods.PSObject.Properties | ForEach-Object { [double]$_.Value.by
 $sizes.totalBytes = [double]$total
 $sizes | ConvertTo-Json -Depth 4 | Set-Content $sizesPath -Encoding UTF8
 "sizes added: $added ($($added - ($new | Where-Object { $_.sizeKnown }).Count) still unknown; fix-sizes.ps1 fills them)"
+
+# remember the server so it shows in the dashboard and can get a preset
+$doc = Get-Content $serversPath -Raw | ConvertFrom-Json
+if (-not @($doc.servers | Where-Object { $_.id -eq $srvId })) {
+  $key = ([string]$d.server.name -split '\|')[0].Trim()
+  if ($key.Length -gt 60) { $key = $key.Substring(0, 60).Trim() }
+  $mods = @($d.server.mods | ForEach-Object {
+    $m = $_
+    $e = 0
+    if ($sizes.mods.PSObject.Properties[$m.id]) { $e = [double]$sizes.mods.($m.id).bytes }
+    [PSCustomObject]@{ id = $m.id; name = $m.name; e = $e }
+  })
+  $doc.servers = @($doc.servers) + @([PSCustomObject]@{ id = $srvId; name = $d.server.name; key = $key; mods = $mods })
+  $doc | ConvertTo-Json -Depth 6 | Set-Content $serversPath -Encoding UTF8
+  "tracked: $($d.server.name)"
+}
