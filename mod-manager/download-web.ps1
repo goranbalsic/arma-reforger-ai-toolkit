@@ -446,7 +446,7 @@ async function tick(){
   s.recent.forEach(r=>{D[r.id]=1;B[r.id]=r.b});
   s.active.forEach(a=>{A[a.id]=1});
   (s.cl||[]).forEach(id=>{D[id]=1});   // installed client-side before the batch counts as on disk
-  const key=s.recent.length+'|'+s.active.map(a=>a.id).join(',');
+  const key=s.recent.length+'|'+(s.cl||[]).length+'|'+s.active.map(a=>a.id).join(',');
   if(key!==lastKey){          // lists only re-render when something actually finished/started
    lastKey=key;
    document.getElementById('reccount').textContent='('+s.recent.length+')';
