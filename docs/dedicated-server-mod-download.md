@@ -80,6 +80,30 @@ by a stuck download — a 0 MB stub folder is the classic stuck-resume state and
 must be deleted before either retry path). Alternatively mount directly:
 `ArmaReforgerSteam.exe -addonsDir "<dir>" -addons "<FolderName>"`.
 
+## Batch-downloading a multi-server mod union
+
+To grab the combined modlist of several servers at once (verified with a
+6-server, 665-mod union):
+
+1. Pull each server's reported mods from `/v2/servers/{id}` (reforgermods.net
+   V2 API) and union them by mod id — servers share many mods, so the union is
+   far smaller than the sum of the lists.
+2. List the locally installed addons by the GUID suffix of each folder in
+   `Documents\My Games\ArmaReforger\addons\*_<GUID>` and subtract.
+3. Size the batch with `POST /v2/tools/storage-plan` (`mode: "add"`,
+   `current` = installed ids, `desired` = union ids). It resolves exact
+   Workshop bytes server-side, no API key. Cap: **500 mods across both lists
+   per call** — chunk the desired list, dedupe the returned `downloads` by id,
+   and sum `bytes`.
+4. Write the DS `config.json` with only the *missing* mods (the installed ones
+   would be duplicate downloads) and run the DS as above. The DS always pulls
+   the latest published version of each mod; server-reported versions may lag.
+5. When the log goes quiet, robocopy the new `serverprofile\addons\<Name>_<GUID>`
+   folders straight into `Documents\My Games\ArmaReforger\addons\`.
+
+Rate limits: 60 req/min anonymous on read endpoints; `storage-plan` is a
+single POST per chunk and unaffected in practice.
+
 ## Notes
 
 - In-game download speed ≈ server download speed (same backend); the win is
