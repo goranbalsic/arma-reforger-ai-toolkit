@@ -16,6 +16,16 @@ $sizeMap = @{}
 foreach ($p in $j.mods.PSObject.Properties) { $sizeMap[$p.Name] = $p.Value }
 $TotalBytes = $j.totalBytes
 
+$ServersPath = "$env:USERPROFILE\Documents\Default Project\batch1-servers.json"
+$serverList = @()
+if (Test-Path $ServersPath) {
+  $serverList = @((Get-Content $ServersPath -Raw | ConvertFrom-Json).servers)
+  foreach ($sv in $serverList) { foreach ($m in $sv.mods) {
+    $sm = $sizeMap[$m.id]
+    $m | Add-Member -NotePropertyName e -NotePropertyValue ([double]($(if ($sm) { $sm.bytes } else { 0 }))) -Force
+  } }
+}
+
 $verify = $null   # last verify result shown on the page
 
 function Get-DS { Get-Process ArmaReforgerServer -ErrorAction SilentlyContinue }
@@ -29,7 +39,7 @@ $script:dirCache = $null; $script:dirCacheAt = (Get-Date).AddMinutes(-10)
 
 function Get-DirMap {
   # one recursive pass, grouped by folder - far faster than per-folder listings
-  if (((Get-Date) - $script:dirCacheAt).TotalSeconds -lt 5) { return $script:dirCache }
+  if (((Get-Date) - $script:dirCacheAt).TotalSeconds -lt 1) { return $script:dirCache }
   $map = @{}
   Get-ChildItem $Addons -Recurse -File -ErrorAction SilentlyContinue |
     ForEach-Object {
@@ -51,14 +61,17 @@ function Get-DirMap {
 
 function Get-GlobalSpeed {
   $lg = Get-Log
-  if (-not $lg) { return 0 }
+  if (-not $lg -or $lg.LastWriteTime -lt (Get-Date).AddMinutes(-2)) { return 0 }   # stale log = DS idle between mods
   $line = Get-Content $lg.FullName -Tail 60 | Select-String 'Download speed ([0-9.]+) KB/s' | Select-Object -Last 1
-  if ($line) { [Math]::Round($line.Matches[0].Groups[1].Value / 1024, 1) } else { 0 }
+  if ($line) { [Math]::Round([double]$line.Matches[0].Groups[1].Value * 1024) } else { 0 }
 }
 
 function Get-Status {
   $dirs = Get-DirMap
-  $doneBytes = ($dirs.Values | ForEach-Object { [double]$_.bytes } | Measure-Object -Sum).Sum
+  # only batch mods count toward progress; dependency mods the DS auto-pulls
+  # have no sizeMap entry and would otherwise push doneB past totalB
+  $doneBytes = ($dirs.GetEnumerator() | Where-Object { $sizeMap.ContainsKey($_.Key) } |
+    ForEach-Object { [double]$_.Value.bytes } | Measure-Object -Sum).Sum
 
   # complete = folder stable (no writes 2 min) AND assembled AND size matches Workshop (when known).
   # the DS writes gproj/meta/rdb before the data paks, so "assembled" alone lies mid-download.
@@ -78,19 +91,19 @@ function Get-Status {
     Where-Object { -not $completed.ContainsKey($_.Key) -and $_.Value.mtime -gt $now.AddMinutes(-5) } |
     Sort-Object { $_.Value.mtime } -Descending | Select-Object -First 3) | ForEach-Object {
     $sm = $sizeMap[$_.Key]; $exp = if ($sm) { [double]$sm.bytes } else { 0 }
-    @{ name = $_.Value.name; mb = [Math]::Round($_.Value.bytes/1MB, 1); expMb = [Math]::Round($exp/1MB, 1);
+    @{ id = $_.Key; name = $_.Value.name; b = [double]$_.Value.bytes; expB = $exp;
        pct = if ($exp) { [Math]::Min(100, [int](100 * $_.Value.bytes / $exp)) } else { 0 } }
   }
 
-  # recently completed (15 min), newest first
-  $recent = @($dirs.GetEnumerator() | Where-Object { $completed.ContainsKey($_.Key) -and
-    $_.Value.mtime -gt $now.AddMinutes(-15) } |
-    Sort-Object { $_.Value.mtime } -Descending | Select-Object -First 12) | ForEach-Object {
-    @{ name = $_.Value.name; gb = [Math]::Round($_.Value.bytes/1GB, 2); mb = [Math]::Round($_.Value.bytes/1MB, 1) }
+  # all completed mods, newest first (full list - the page shows every one).
+  # ids go with them: sync-addons mirrors exactly this set (single completion rule)
+  $recent = @($dirs.GetEnumerator() | Where-Object { $completed.ContainsKey($_.Key) } |
+    Sort-Object { $_.Value.mtime } -Descending) | ForEach-Object {
+    @{ id = $_.Key; name = $_.Value.name; b = [double]$_.Value.bytes }
   }
 
-  @{ running = [bool](Get-DS); speed = Get-GlobalSpeed
-     doneGb = [Math]::Round($doneBytes/1GB, 2); totalGb = [Math]::Round($TotalBytes/1GB, 2)
+  @{ running = [bool](Get-DS); speedB = Get-GlobalSpeed
+     doneB = [double]$doneBytes; totalB = [double]$TotalBytes
      pct = [Math]::Min(100, [int](100 * $doneBytes / $TotalBytes))
      doneCount = $doneCount; totalMods = $sizeMap.Count
      active = @($active); recent = @($recent); verify = $verify }
@@ -104,10 +117,13 @@ if ($Check) {
 
 function Start-DS {
   if (Get-DS) { return 'already running' }
+  # the 1 MB download-list trap: trimming is lossless (DS skips done mods anyway),
+  # skipping it makes the DS insta-crash ~30 s after a false "started"
+  & "$PSScriptRoot\trim-config.ps1" | Out-Null
   Start-Process -FilePath $Exe -ArgumentList "-config `"$Cfg`" -profile `"$Profile`"" `
     -WorkingDirectory "$W\armar-server" -WindowStyle Hidden
-  Start-Sleep 3
-  if (Get-DS) { 'started' } else { 'FAILED to start - check server.log' }
+  Start-Sleep 20   # the DS crash on a bad config happens ~30 s in; a 3 s check lied
+  if (Get-DS) { 'started' } else { 'FAILED to start - check serverprofile\logs' }
 }
 
 function Stop-DS {
@@ -119,7 +135,7 @@ function Stop-DS {
 }
 
 function Invoke-Verify {
-  # shortcut: verifies only the 561 batch mods against Workshop sizes; dependency
+  # shortcut: verifies only the batch mods against Workshop sizes; dependency
   # mods the DS auto-pulls are outside sizeMap and skipped - upgrade by adding
   # their ids to the sizes file if deps ever need checking
   $dirs = Get-DirMap
@@ -130,7 +146,7 @@ function Invoke-Verify {
     if (-not $d) { $pending++; continue }
     if (-not $d.assembled) { $partial++; continue }
     if ([Math]::Abs($d.bytes - $exp) -le [Math]::Max(2MB, 0.02 * $exp)) { $ok++ }
-    else { $suspects += @{ name = $d.name; exp = [Math]::Round($exp/1GB, 2); act = [Math]::Round($d.bytes/1GB, 2) } }
+    else { $suspects += @{ name = $d.name; expB = [double]$exp; actB = [double]$d.bytes } }
   }
   $script:verify = @{ at = (Get-Date -f 'HH:mm:ss'); ok = $ok; partial = $partial
                       pending = $pending; suspects = $suspects }
@@ -153,6 +169,8 @@ $html = @'
  button:disabled{opacity:.5;cursor:default}
  ul{list-style:none;margin:6px 0 0;padding:0;font-size:13px}
  li{padding:3px 0;border-bottom:1px solid #26282e}
+ details{margin:2px 0} summary{cursor:pointer;font-size:13px;padding:3px 0;color:#fff}
+ #srv ul{margin:4px 0 0 16px}
  .ok{color:#7ed07e} .warn{color:#e0b13e} .bad{color:#e06c6c} .dim{color:#8a8e98}
  #vres{display:none}
  .big{font-size:26px;font-weight:600;color:#fff}
@@ -170,9 +188,26 @@ $html = @'
  <div id="vres" class="card" style="margin:14px 0 0;padding:10px 14px"></div>
 </div>
 <div class="card" id="actcard" style="display:none"><h2 style="font-size:15px;margin:0 0 8px;color:#fff">Downloading now</h2><div id="act"></div></div>
-<div class="card"><h2 style="font-size:15px;margin:0 0 4px;color:#fff">Completed (last 15 min)</h2><ul id="rec"></ul></div>
+<div class="card"><h2 style="font-size:15px;margin:0 0 4px;color:#fff">Servers <span id="srvcount" class="dim"></span></h2><div id="srv" class="dim">loading server lists...</div></div>
+<div class="card"><h2 style="font-size:15px;margin:0 0 4px;color:#fff">Completed <span id="reccount" class="dim"></span></h2><ul id="rec"></ul></div>
 <script>
-function fmt(n){return n.toFixed(2)}
+function esc(x){return String(x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function sz(b){return b>=1073741824?(b/1073741824).toFixed(2)+' GB':b>=1048576?(b/1048576).toFixed(1)+' MB':b>=1024?(b/1024).toFixed(1)+' KB':Math.round(b)+' B'}
+let SRV=null,lastKey='';
+async function loadSrv(){try{SRV=await (await fetch('/servers')).json()}catch(e){}}
+function renderSrv(D,A,B){
+ if(!SRV)return;
+ document.getElementById('srvcount').textContent='('+SRV.servers.length+')';
+ document.getElementById('srv').innerHTML=SRV.servers.map(v=>{
+  const done=v.mods.filter(m=>D[m.id]).length;
+  return '<details><summary>'+esc(v.name)+' <span class="dim">'+done+' / '+v.mods.length+' downloaded</span></summary><ul>'+
+   v.mods.map(m=>{
+    const t=D[m.id]?'<span class="ok">&#10003;</span>':A[m.id]?'<span class="warn">&#10227;</span>':'<span class="dim">&#8226;</span>';
+    const s2=D[m.id]?sz(B[m.id]||0):(m.e>0?sz(m.e):'not queued');
+    return '<li>'+t+' '+esc(m.name)+' <span class="dim">'+s2+'</span></li>';
+   }).join('')+'</ul></details>';
+ }).join('');
+}
 async function tick(){
  try{
   const s=await (await fetch('/status')).json();
@@ -180,26 +215,35 @@ async function tick(){
   document.getElementById('st').innerHTML=s.running
     ?'<span class="dot" style="background:#4cc35e"></span><span class="ok">running</span>'
     :'<span class="dot" style="background:#e06c6c"></span><span class="bad">stopped</span>';
-  document.getElementById('gbtxt').textContent=fmt(s.doneGb)+' / '+fmt(s.totalGb)+' GB';
+  document.getElementById('gbtxt').textContent=sz(s.doneB)+' / '+sz(s.totalB);
   document.getElementById('tbar').style.width=s.pct+'%';
-  document.getElementById('spd').textContent=s.running?(s.speed+' MB/s'):'paused';
+  document.getElementById('spd').textContent=s.running?(s.speedB>0?sz(s.speedB)+'/s':'idle'):'paused';
   document.getElementById('cnt').textContent=s.doneCount+' / '+s.totalMods+' mods assembled';
-  const eta=(s.speed>0.05)?Math.round((s.totalGb-s.doneGb)*1024/s.speed/60)+' min left':'--';
+  const eta=(s.speedB>51200)?Math.round((s.totalB-s.doneB)/s.speedB/60)+' min left':'--';
   document.getElementById('etabox').textContent=eta;
   const ac=document.getElementById('actcard');
   if(s.active.length){ac.style.display='block';
    document.getElementById('act').innerHTML=s.active.map(a=>
-    '<div class="row"><span>'+a.name+'</span><span class="dim">'+(a.expMb>0?(a.mb+' / '+a.expMb+' MB'):a.mb+' MB (dependency, size unknown)')+'</span></div>'+
-    (a.expMb>0?'<div class="bar amber"><div style="width:'+a.pct+'%"></div></div>':'')).join('');
+    '<div class="row"><span>'+esc(a.name)+'</span><span class="dim">'+(a.expB>0?(sz(a.b)+' / '+sz(a.expB)):sz(a.b)+' (dependency, size unknown)')+'</span></div>'+
+    (a.expB>0?'<div class="bar amber"><div style="width:'+a.pct+'%"></div></div>':'')).join('');
   } else ac.style.display='none';
-  document.getElementById('rec').innerHTML=s.recent.length
-    ?s.recent.map(r=>'<li class="ok">&#10003; '+r.name+' <span class="dim">'+(r.gb<0.1?fmt(r.mb)+' MB':fmt(r.gb)+' GB')+'</span></li>').join('')
+  const D={},A={},B={};
+  s.recent.forEach(r=>{D[r.id]=1;B[r.id]=r.b});
+  s.active.forEach(a=>{A[a.id]=1});
+  const key=s.recent.length+'|'+s.active.map(a=>a.id).join(',');
+  if(key!==lastKey){          // lists only re-render when something actually finished/started
+   lastKey=key;
+   document.getElementById('reccount').textContent='('+s.recent.length+')';
+   document.getElementById('rec').innerHTML=s.recent.length
+    ?s.recent.map(r=>'<li class="ok">&#10003; '+esc(r.name)+' <span class="dim">'+sz(r.b)+'</span></li>').join('')
     :'<li class="dim">nothing finished yet</li>';
+   renderSrv(D,A,B);
+  }
   const v=document.getElementById('vres');
   if(s.verify){v.style.display='block';const x=s.verify;
    let t='<b>Verify '+x.at+'</b> - <span class="ok">'+x.ok+' ok</span>, '+x.partial+' partial, '+x.pending+' pending';
    if(x.suspects&&x.suspects.length){t+='<br><span class="bad">Size mismatch (re-download candidates):</span><ul>'+
-     x.suspects.map(z=>'<li class="bad">'+z.name+' - expected '+z.exp+' GB, on disk '+z.act+' GB</li>').join('')+'</ul>';}
+     x.suspects.map(z=>'<li class="bad">'+esc(z.name)+' - expected '+sz(z.expB)+', on disk '+sz(z.actB)+'</li>').join('')+'</ul>';}
    else t+='<br><span class="ok">No size mismatches - installed mods look intact.</span>';
    v.innerHTML=t;}
  }catch(e){}
@@ -209,7 +253,7 @@ async function act(w){
  await fetch('/'+w,{method:'POST'}); if(w==='verify')await new Promise(r=>setTimeout(r,500));
  await tick(); if(b){b.disabled=false;b.textContent=w==='start'?'Start / Resume':w==='pause'?'Pause':'Verify mods';}
 }
-tick(); setInterval(tick,2000);
+loadSrv(); tick(); setInterval(tick,500);
 </script></body></html>
 '@
 
@@ -230,6 +274,7 @@ Start-Process $Url
 while ($l.IsListening) {
   $ctx = $l.GetContext()
   try {
+    $msg = $null   # must reset per request or it leaks into the next response body
     $path = $ctx.Request.Url.AbsolutePath
     $ctx.Response.Headers.Add('Cache-Control', 'no-store')
     switch ($path) {
@@ -241,6 +286,11 @@ while ($l.IsListening) {
       }
       '/status' {
         $b = [Text.Encoding]::UTF8.GetBytes((Get-Status | ConvertTo-Json -Depth 5 -Compress))
+        $ctx.Response.ContentType = 'application/json'
+        $ctx.Response.OutputStream.Write($b, 0, $b.Length)
+      }
+      '/servers' {
+        $b = [Text.Encoding]::UTF8.GetBytes((@{ servers = $serverList } | ConvertTo-Json -Depth 5 -Compress))
         $ctx.Response.ContentType = 'application/json'
         $ctx.Response.OutputStream.Write($b, 0, $b.Length)
       }

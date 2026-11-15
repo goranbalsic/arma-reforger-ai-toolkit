@@ -106,6 +106,36 @@ single POST per chunk and unaffected in practice.
 
 ## Traps learned the hard way (batch of 600+ mods)
 
+- **Temp folders are not storage**: the whole downloader (DS profile with tens
+  of GB of finished mods included) originally lived in `%TEMP%`. One temp
+  cleaner run would have deleted everything. It now lives in a permanent
+  folder and the Desktop shortcut points there.
+- **Server state leaked between requests**: the dashboard's HTTP loop reused a
+  `$msg` variable across requests, so the JSON `{"ok":true}` from a Start or
+  Verify click got appended to the next `/status` response, which broke JSON
+  parsing in the browser until reload. Reset per-request state inside the loop.
+- **One completion rule only**: the rule (assembled files + quiet 2 min + size
+  match) lives in the dashboard's `/status` completed list; `sync-addons.ps1`
+  mirrors exactly that list. A separate "quiet folder" heuristic in the sync
+  mirrored half-downloaded mods after a hard kill. `test-rules.ps1` asserts the
+  served rule against disk live.
+- **`robocopy /MIR` needs a single-writer guarantee**: two concurrent sync
+  loops (check-then-start race after a dashboard restart) can delete while
+  each other copies. A named mutex makes the instance check atomic.
+- **Preset blocks belong inside `SCR_WorkshopAddonManagerPresetStorage`**, and
+  GUIDs are quoted (`SCR_WorkshopAddonPreset "{GUID}" {`). A preset block
+  appended after the storage block, or with bare-brace GUIDs, gets dropped by
+  the game on its next save. `tools/make-preset.ps1` inserts correctly,
+  includes only locally installed mods (unresolvable entries poison the
+  preset), and verifies braces + counts.
+- **`Start-Process` liveness checks lie**: the DS crash on an oversized
+  download-list happens ~30 s in; a 3 s check reported "started" for a DS that
+  was about to die. Check after 20 s, and re-trim the config inside Start-DS
+  so the trap cannot be hit by pressing the button.
+- **Dependency mods are not batch progress**: the DS auto-pulls dependencies
+  with no config entry. Counting their disk bytes into `doneB` pushed progress
+  past 100% and made the ETA go negative. Sum only ids present in the sizes
+  file; deps still show in the Completed list.
 - **1 MB download-list limit**: at startup the DS requests
   `WorkshopApi/GetDownloadListS2S` for every mod in its config. Past ~600 mods
   the response body exceeds the DS's hard 1 MB cap
@@ -131,6 +161,10 @@ single POST per chunk and unaffected in practice.
   returning non-exact entries. Chunk the desired list (<= 500 mods per call
   across current+desired), and re-fetch any non-exact mods individually from
   `/v2/mods/{id}` (throttle under the 60 req/min limit).
+- **Sizes files are merge-only**: the DS config is trimmed to remaining mods,
+  so any script that rebuilds a sizes file *from the config* and *replaces*
+  the existing file destroys the full map. `get-sizes.ps1` merges; the same
+  applies to any future size tool.
 
 ## Notes
 
