@@ -40,6 +40,8 @@ if (Test-Path $ServersPath) {
 
 $verify = $null   # last verify result shown on the page
 $script:maxDone = [double]0; $script:maxDoneTotal = [double]0   # high-water progress: the DS deletes temp files, so raw bytes dip
+$script:restartAt = $null; $script:autoRestarts = 0             # downloader watchdog
+$script:pausedByUser = $false                                   # explicit Pause must survive the watchdog
 
 $ApiBase = 'https://api.reforgermods.net/v2'
 $ApiH = @{ 'User-Agent' = 'arma-reforger-ai-toolkit/1.0' }
@@ -216,6 +218,7 @@ if ($Check) {
 }
 
 function Start-DS {
+  $script:pausedByUser = $false
   if (Get-DS) { return 'already running' }
   # the 1 MB download-list trap: trimming is lossless (DS skips done mods anyway),
   # skipping it makes the DS insta-crash ~30 s after a false "started"
@@ -234,6 +237,7 @@ function Start-DS {
 }
 
 function Stop-DS {
+  $script:pausedByUser = $true   # the watchdog must not undo an explicit pause
   $p = Get-DS
   if (-not $p) { return 'not running' }
   $p | Stop-Process -Force
@@ -250,6 +254,8 @@ function Invoke-Verify {
   $dirs = Get-DirMap
   $clSet = @{}
   foreach ($i in (Get-ClientIds)) { $clSet[$i] = $true }
+  $queued = @{}
+  try { foreach ($m in (Get-Content $Cfg -Raw | ConvertFrom-Json).game.mods) { $queued[$m.modId] = $true } } catch { }
   $ok = 0; $partial = 0; $pending = 0; $suspects = @()
   foreach ($id in $sizeMap.Keys) {
     $sm = $sizeMap[$id]; $exp = [double]$sm.bytes
@@ -258,7 +264,8 @@ function Invoke-Verify {
     if ($dsOk -or $clSet.ContainsKey($id)) { $ok++; continue }   # installed somewhere is installed
     if (-not $d) { $pending++; continue }
     $partial++
-    if ($exp) { $suspects += @{ name = $d.name; expB = [double]$exp; actB = [double]$d.bytes } }
+    # a mod that is still queued is downloading, not a re-download candidate
+    if ($exp -and -not $queued.ContainsKey($id)) { $suspects += @{ name = $d.name; expB = [double]$exp; actB = [double]$d.bytes } }
   }
   $script:verify = @{ at = (Get-Date -f 'HH:mm:ss'); ok = $ok; partial = $partial
                       pending = $pending; suspects = $suspects }
@@ -637,6 +644,38 @@ loadSrv();
 </script></body></html>
 '@
 
+function Invoke-DownloaderWatchdog {
+  # The DS downloads the pending mods, then exits: it cannot create a game world
+  # while mods are still missing. Without this restart the download stops
+  # silently and in-flight mods stay partial (it looked like it paused itself).
+  $log = Join-Path $Data 'watchdog.log'
+  if (Get-DS) { $script:restartAt = $null; return }
+  if ($script:pausedByUser) { return }   # user pressed Pause
+  if (-not $script:restartAt) {
+    $pending = 0
+    try { $pending = @((Get-Content $Cfg -Raw | ConvertFrom-Json).game.mods).Count } catch { }
+    if ($pending -gt 0) {
+      $script:restartAt = (Get-Date).AddSeconds(10)
+      "[$(Get-Date -f HH:mm:ss)] downloader down, $pending mods queued - restart in 10 s" | Add-Content $log
+    }
+    return
+  }
+  if ((Get-Date) -lt $script:restartAt) { return }
+  $script:restartAt = $null
+  if ($script:autoRestarts -ge 60) {
+    "[$(Get-Date -f HH:mm:ss)] giving up after 60 auto-restarts" | Add-Content $log
+    return
+  }
+  & "$PSScriptRoot\trim-config.ps1" | Out-Null
+  $pending = 0
+  try { $pending = @((Get-Content $Cfg -Raw | ConvertFrom-Json).game.mods).Count } catch { }
+  if ($pending -eq 0) { "[$(Get-Date -f HH:mm:ss)] queue empty - no restart" | Add-Content $log; return }
+  $script:autoRestarts++
+  Start-Process -FilePath $Exe -ArgumentList "-config `"$Cfg`" -profile `"$Profile`"" `
+    -WorkingDirectory "$Root\armar-server" -WindowStyle Hidden
+  "[$(Get-Date -f HH:mm:ss)] restarted downloader (#$($script:autoRestarts)), $pending mods left" | Add-Content $log
+}
+
 $l = [System.Net.HttpListener]::new(); $l.Prefixes.Add($Url)
 try { $l.Start() }
 catch {
@@ -659,7 +698,10 @@ Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile','-Execut
 Start-Process $Url
 
 while ($l.IsListening) {
-  $ctx = $l.GetContext()
+  # wait for a request, running the downloader watchdog once a second meanwhile
+  $wait = $l.GetContextAsync()
+  while (-not $wait.Wait(1000)) { Invoke-DownloaderWatchdog }
+  $ctx = $wait.Result
   try {
     $msg = $null   # must reset per request or it leaks into the next response body
     $path = $ctx.Request.Url.AbsolutePath
