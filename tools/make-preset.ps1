@@ -1,10 +1,12 @@
-# Build the "ArmaDudes 1" launcher preset from the server's real modlist.
+# Build an Arma Reforger launcher preset from a server's real modlist.
+#   .\make-preset.ps1 -ServerId <server guid>     # or no argument for ArmaDudes 1
 # The preset block MUST go inside SCR_WorkshopAddonManagerPresetStorage - a block
 # appended after it gets dropped by the game (that is what killed the 01:13
 # attempt; the 02:41 save wiped it). Only mods already installed locally are
 # included: the launcher deletes preset entries it cannot resolve, so uninstalled
 # workshop items would poison the whole preset on exit. Re-run when the batch
 # finishes to pick up the rest.
+param([string]$ServerId)
 $ErrorActionPreference = 'Stop'
 
 $conf = Get-ChildItem "$env:USERPROFILE\Documents\My Games\ArmaReforger\profile\.save" -Recurse -Filter ReforgerGameSettings.conf |
@@ -17,19 +19,24 @@ $clAddons = "$env:USERPROFILE\Documents\My Games\ArmaReforger\addons"
 if (Get-Process ArmaReforgerSteam -ErrorAction SilentlyContinue) { throw 'Game is running - close it first (it rewrites this file on exit)' }
 
 $text = [IO.File]::ReadAllText($conf)
-if ($text -match 'm_sName "ArmaDudes 1"') { throw 'preset ArmaDudes 1 already exists - delete it in the launcher first' }
 
-$ad1 = @($srvs.servers | Where-Object { $_.name -match 'ArmaDudes 1\b' })[0]
-if (-not $ad1) { throw 'ArmaDudes 1 not found in batch1-servers.json (run build-servers first)' }
+$srv = if ($ServerId) { @($srvs.servers | Where-Object { $_.id -eq $ServerId })[0] }
+       else { @($srvs.servers | Where-Object { $_.name -match 'ArmaDudes 1\b' })[0] }
+if (-not $srv) { throw 'server not found in batch1-servers.json' }
+$presetName = if ($srv.PSObject.Properties['key'] -and $srv.key) { [string]$srv.key }
+              else { ([string]$srv.name -split '\|')[0].Trim() }
+if ($presetName.Length -gt 60) { $presetName = $presetName.Substring(0, 60).Trim() }
+$presetName = $presetName -replace '"', "'"
+if ($text -match ('m_sName "' + [regex]::Escape($presetName) + '"')) { throw "preset '$presetName' already exists - delete it in the launcher first" }
 
 $installed = @{}
 Get-ChildItem $clAddons -Directory |
   Where-Object { $_.Name -match '_([0-9A-F]{16})$' } |
   ForEach-Object { $installed[$Matches[1]] = ($_.Name -replace '_[0-9A-F]{16}$', '') }
-$mods = @($ad1.mods | Where-Object { $installed.ContainsKey($_.id) })
-"server: $($ad1.name)  mods=$($ad1.mods.Count)  installed here: $($mods.Count)"
-if ($mods.Count -lt $ad1.mods.Count) {
-  "note: $($ad1.mods.Count - $mods.Count) mods not installed yet - re-run this after the batch finishes"
+$mods = @($srv.mods | Where-Object { $installed.ContainsKey($_.id) })
+"server: $($srv.name)  mods=$($srv.mods.Count)  installed here: $($mods.Count)"
+if ($mods.Count -lt $srv.mods.Count) {
+  "note: $($srv.mods.Count - $mods.Count) mods not installed yet - re-run this after the batch finishes"
 }
 if (-not $mods) { throw 'no installed mods for this preset yet' }
 
@@ -39,7 +46,7 @@ function Get-Hash16([string]$s) {
   $sha = [System.Security.Cryptography.SHA256]::Create()
   ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($s))) -replace '-', '').Substring(0, 16)
 }
-$presetGuid = (Get-Hash16 "preset:$($ad1.id)").ToUpper()
+$presetGuid = (Get-Hash16 "preset:$($srv.id)").ToUpper()
 $metas = foreach ($m in $mods) {
   $g = (Get-Hash16 "meta:$($m.id)").ToUpper()
   $n = $installed[$m.id] -replace '"', ''
@@ -49,7 +56,7 @@ $metas = foreach ($m in $mods) {
   '   }'
 }
 $body = '  SCR_WorkshopAddonPreset "{' + $presetGuid + '}" {' + "`r`n" +
-        '   m_sName "ArmaDudes 1"' + "`r`n" +
+        '   m_sName "' + $presetName + '"' + "`r`n" +
         '   m_aAddonsMeta {' + "`r`n" +
         (($metas -join "`r`n") + "`r`n") +
         '   }' + "`r`n" +
@@ -66,4 +73,4 @@ $close = ([regex]::Matches($check, '\}')).Count
 $presets = [regex]::Matches($check, 'SCR_WorkshopAddonPreset "\{[0-9A-F]{16}\}"').Count
 "verification: presets=$presets meta=$($mods.Count) braces=$open/$close"
 if ($presets -ne 1 -or $open -ne $close) { throw 'verification failed - restore from the .bak next to the conf' }
-"OK - preset 'ArmaDudes 1' with $($mods.Count) installed mods"
+"OK - preset '$presetName' with $($mods.Count) installed mods"

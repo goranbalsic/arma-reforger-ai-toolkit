@@ -130,10 +130,17 @@ function Start-DS {
   # the 1 MB download-list trap: trimming is lossless (DS skips done mods anyway),
   # skipping it makes the DS insta-crash ~30 s after a false "started"
   & "$PSScriptRoot\trim-config.ps1" | Out-Null
-  Start-Process -FilePath $Exe -ArgumentList "-config `"$Cfg`" -profile `"$Profile`"" `
-    -WorkingDirectory "$W\armar-server" -WindowStyle Hidden
-  Start-Sleep 20   # the DS crash on a bad config happens ~30 s in; a 3 s check lied
-  if (Get-DS) { 'started' } else { 'FAILED to start - check serverprofile\logs' }
+  $dsArgs = "-config `"$Cfg`" -profile `"$Profile`""
+  foreach ($try in 1, 2) {
+    Start-Process -FilePath $Exe -ArgumentList $dsArgs `
+      -WorkingDirectory "$W\armar-server" -WindowStyle Hidden
+    Start-Sleep 25   # the DS either settles into downloading or dies within ~20 s
+    if (Get-DS) { return 'started' }
+  }
+  $lg = Get-Log
+  $why = if ($lg) { @(Get-Content $lg.FullName -Tail 20 -ErrorAction SilentlyContinue |
+    Select-String 'error|ERROR' | Select-Object -Last 2 | ForEach-Object { $_.Line.Trim() }) -join ' | ' }
+  "FAILED to start$(if ($why) { " - last log: $why" } else { ' - no log written, check serverprofile\logs' })"
 }
 
 function Stop-DS {
@@ -163,6 +170,52 @@ function Invoke-Verify {
   "verify: $ok ok, $partial partial, $pending pending, $($suspects.Count) suspects"
 }
 
+function Get-HaveIds {
+  # on disk = assembled in the DS profile, or present in the client addons folder
+  $have = @{}
+  foreach ($e in (Get-DirMap).GetEnumerator()) { if ($e.Value.assembled) { $have[$e.Key] = $true } }
+  foreach ($id in (Get-ClientIds)) { $have[$id] = $true }
+  $have
+}
+
+function Invoke-QueueServer([string]$Id) {
+  # reorder the queue: this server's missing mods download first, the rest of
+  # the batch follows unchanged - nothing is dropped or paused
+  $srv = @($serverList | Where-Object { $_.id -eq $Id })[0]
+  if (-not $srv) { throw 'unknown server id' }
+  $name = if ($srv.PSObject.Properties['key'] -and $srv.key) { [string]$srv.key } else { ([string]$srv.name -split '\|')[0].Trim() }
+  $have = Get-HaveIds
+  $first = @($srv.mods | Where-Object { -not $have.ContainsKey($_.id) } |
+    ForEach-Object { [PSCustomObject]@{ modId = $_.id; name = $_.name } })
+  if (-not $first) { return "nothing to do - all $($srv.mods.Count) mods are already on disk" }
+  $j = Get-Content $Cfg -Raw | ConvertFrom-Json
+  $ids = @($first | ForEach-Object { $_.modId })
+  $rest = @($j.game.mods | Where-Object { $ids -notcontains $_.modId })
+  $j.game.mods = @($first + $rest)
+  $j | ConvertTo-Json -Depth 5 | Set-Content $Cfg -Encoding UTF8
+  Stop-DS | Out-Null
+  $r = Start-DS
+  "queue reordered: $($first.Count) missing mods of '$name' download first, the other $($rest.Count) pending mods follow ($r)"
+}
+
+function Invoke-ResumeBatch {
+  # the full batch is deterministic: every sizeMap mod not yet on disk
+  $have = Get-HaveIds
+  $mods = @($sizeMap.Keys | Where-Object { -not $have.ContainsKey($_) } |
+    ForEach-Object { [PSCustomObject]@{ modId = $_; name = [string]$sizeMap[$_].name } })
+  $j = Get-Content $Cfg -Raw | ConvertFrom-Json
+  $j.game.mods = $mods
+  $j | ConvertTo-Json -Depth 5 | Set-Content $Cfg -Encoding UTF8
+  Stop-DS | Out-Null
+  $r = Start-DS
+  "full batch resumed: $($mods.Count) mods remaining ($r)"
+}
+
+function Invoke-MakePreset([string]$Id) {
+  $out = & "$PSScriptRoot\make-preset.ps1" -ServerId $Id
+  ($out | Out-String).Trim()
+}
+
 $html = @'
 <!doctype html><html><head><meta charset="utf-8"><title>Reforger Mods Download</title>
 <style>
@@ -176,6 +229,7 @@ $html = @'
  .row{display:flex;justify-content:space-between;margin:6px 0 4px;font-size:13px}
  button{background:#3b6fe0;border:0;color:#fff;padding:9px 18px;border-radius:7px;font-size:14px;cursor:pointer;margin-right:8px}
  button.grey{background:#4a4e58} button.amber{background:#b3872e}
+ button.mini{padding:2px 10px;font-size:12px;margin:0 0 0 6px} button.mini.grey{background:#4a4e58} button.mini.amber{background:#b3872e}
  button:disabled{opacity:.5;cursor:default}
  ul{list-style:none;margin:6px 0 0;padding:0;font-size:13px}
  li{padding:3px 0;border-bottom:1px solid #26282e}
@@ -210,7 +264,9 @@ function renderSrv(D,A,B){
  document.getElementById('srvcount').textContent='('+SRV.servers.length+')';
  document.getElementById('srv').innerHTML=SRV.servers.map(v=>{
   const done=v.mods.filter(m=>D[m.id]).length;
-  return '<details><summary>'+esc(v.name)+' <span class="dim">'+done+' / '+v.mods.length+' downloaded</span></summary><ul>'+
+  return '<details><summary>'+esc(v.name)+' <span class="dim">'+done+' / '+v.mods.length+' downloaded</span>'+
+   '<button class="mini" onclick="queueSrv(\''+v.id+'\',event)">Queue first</button>'+
+   '<button class="mini amber" onclick="presetSrv(\''+v.id+'\',event)">Make preset</button></summary><ul>'+
    v.mods.map(m=>{
     const t=D[m.id]?'<span class="ok">&#10003;</span>':A[m.id]?'<span class="warn">&#10227;</span>':'<span class="dim">&#8226;</span>';
     const s2=B[m.id]!=null?sz(B[m.id]):(m.e>0?sz(m.e):'');
@@ -259,10 +315,31 @@ async function tick(){
    v.innerHTML=t;}
  }catch(e){}
 }
+async function post(w){
+ try{
+  const r=await fetch('/'+w,{method:'POST'});
+  const j=await r.json();
+  if(j.msg)alert(j.msg);
+  if(j.error)alert('failed: '+j.error);
+  await tick();
+ }catch(e){alert('failed: '+e); await tick();}
+}
+async function queueSrv(id,ev){
+ ev.stopPropagation();
+ const b=ev.target; b.disabled=true; b.textContent='...';
+ await post('queue-server?id='+id);
+ b.disabled=false; b.textContent='Queue first';
+}
+async function presetSrv(id,ev){
+ ev.stopPropagation();
+ const b=ev.target; b.disabled=true; b.textContent='...';
+ if(confirm('Create an Arma Reforger launcher preset for this server? Installed mods only, and the game must be closed.'))await post('make-preset?id='+id);
+ b.disabled=false; b.textContent='Make preset';
+}
 async function act(w){
  const b=event?event.target:null; if(b){b.disabled=true;b.textContent='...';}
- await fetch('/'+w,{method:'POST'}); if(w==='verify')await new Promise(r=>setTimeout(r,500));
- await tick(); if(b){b.disabled=false;b.textContent=w==='start'?'Start / Resume':w==='pause'?'Pause':'Verify mods';}
+ await post(w);
+ if(b){b.disabled=false;b.textContent=w==='start'?'Start / Resume':w==='pause'?'Pause':'Verify mods';}
 }
 loadSrv(); tick(); setInterval(tick,500);
 </script></body></html>
@@ -308,10 +385,13 @@ while ($l.IsListening) {
       '/start'  { $msg = Start-DS;        Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Green }
       '/pause'  { $msg = Stop-DS;         Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Yellow }
       '/verify' { $msg = Invoke-Verify;   Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Cyan }
+      '/queue-server' { $msg = Invoke-QueueServer $ctx.Request.QueryString['id']; Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Green }
+      '/resume-batch' { $msg = Invoke-ResumeBatch; Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Green }
+      '/make-preset'  { $msg = Invoke-MakePreset $ctx.Request.QueryString['id'];  Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Cyan }
       default   { $msg = $null; $ctx.Response.StatusCode = 404 }
     }
     if ($msg) {
-      $b = [Text.Encoding]::UTF8.GetBytes('{"ok":true}')
+      $b = [Text.Encoding]::UTF8.GetBytes((@{ ok = $true; msg = [string]$msg } | ConvertTo-Json -Compress))
       $ctx.Response.ContentType = 'application/json'
       $ctx.Response.OutputStream.Write($b, 0, $b.Length)
     }
