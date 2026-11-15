@@ -37,6 +37,18 @@ $j = Get-Content $cfgPath -Raw | ConvertFrom-Json
 $left = @($j.game.mods | Where-Object { -not $done.ContainsKey($_.modId) })
 "config: $(@($j.game.mods).Count) -> remaining: $($left.Count)"
 
+# A partial download has addon.gproj/meta/rdb on disk, so the DS believes it is
+# installed and never fetches it again - it stays partial forever. Delete those
+# folders while the DS is stopped so the next start downloads them from scratch.
+if (-not (Get-Process ArmaReforgerServer -ErrorAction SilentlyContinue)) {
+  foreach ($m in $left) {
+    $d = Get-ChildItem $addons -Directory -Filter "*_$($m.modId)" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $d) { continue }
+    Remove-Item $d.FullName -Recurse -Force -ErrorAction SilentlyContinue
+    "deleted partial download: $($d.Name)"
+  }
+}
+
 $j.game.mods = $left
 $j | ConvertTo-Json -Depth 5 | Set-Content $cfgPath -Encoding UTF8
 "saved"
