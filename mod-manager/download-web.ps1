@@ -59,14 +59,20 @@ function Get-ClientIds {
   $ids = @()
   $root = [IO.DirectoryInfo]::new("$env:USERPROFILE\Documents\My Games\ArmaReforger\addons")
   if ($root.Exists) {
+    $baseLen = $root.FullName.TrimEnd('\').Length + 1
     $sum = @{}
     foreach ($d in $root.EnumerateDirectories()) {
       if ($d.Name -match '_([0-9A-F]{16})$') { $sum[$d.Name] = [double]0 }
     }
-    foreach ($f in $root.EnumerateFiles('*', [IO.SearchOption]::AllDirectories)) {
-      $n = $f.Directory.Name
-      if ($sum.ContainsKey($n)) { $sum[$n] += $f.Length }
-    }
+    try {
+      foreach ($f in $root.EnumerateFiles('*', [IO.SearchOption]::AllDirectories)) {
+        # first path segment = the mod folder: files inside temp\ still belong to it
+        $rel = $f.FullName.Substring($baseLen); $cut = $rel.IndexOf('\')
+        if ($cut -lt 0) { continue }
+        $n = $rel.Substring(0, $cut)
+        if ($sum.ContainsKey($n)) { $sum[$n] += $f.Length }
+      }
+    } catch { }   # an unreadable folder must not take the dashboard down
     $ids = @(foreach ($n in $sum.Keys) {
       $id = [regex]::Match($n, '_([0-9A-F]{16})$').Groups[1].Value
       $sm = $sizeMap[$id]; $exp = if ($sm) { [double]$sm.bytes } else { 0 }
@@ -86,20 +92,28 @@ function Get-DirMap {
   $map = @{}
   $root = [IO.DirectoryInfo]::new($Addons)
   if ($root.Exists) {
-    foreach ($f in $root.EnumerateFiles('*', [IO.SearchOption]::AllDirectories)) {
-      $dir = $f.Directory.Name
-      if ($dir -notmatch '_([0-9A-F]{16})$') { continue }
-      if ($dir -match '^RHS-ContentPack0[12]_') { continue }   # old pre-batch installs, not batch mods
-      $g = $Matches[1]
-      $e = $map[$g]
-      if (-not $e) {
-        $e = $map[$g] = @{ name = $dir -replace '_[0-9A-F]{16}$', ''; bytes = [double]0
-                           assembled = 0; mtime = $f.LastWriteTime }
+    $baseLen = $root.FullName.TrimEnd('\').Length + 1
+    try {
+      foreach ($f in $root.EnumerateFiles('*', [IO.SearchOption]::AllDirectories)) {
+        # first path segment = the mod folder: the DS downloads into <mod>\temp\,
+        # so the immediate parent name is not the mod (it would hide all progress)
+        $rel = $f.FullName.Substring($baseLen); $cut = $rel.IndexOf('\')
+        if ($cut -lt 0) { continue }   # file directly in addons\, not a mod
+        $dir = $rel.Substring(0, $cut)
+        $m = [regex]::Match($dir, '_([0-9A-F]{16})$')
+        if (-not $m.Success) { continue }
+        if ($dir -match '^RHS-ContentPack0[12]_') { continue }   # old pre-batch installs, not batch mods
+        $g = $m.Groups[1].Value
+        $e = $map[$g]
+        if (-not $e) {
+          $e = $map[$g] = @{ name = $dir -replace '_[0-9A-F]{16}$', ''; bytes = [double]0
+                             assembled = 0; mtime = $f.LastWriteTime }
+        }
+        $e.bytes += $f.Length
+        if ($f.LastWriteTime -gt $e.mtime) { $e.mtime = $f.LastWriteTime }
+        if ($f.Name -in 'addon.gproj','meta','resourceDatabase.rdb') { $e.assembled++ }
       }
-      $e.bytes += $f.Length
-      if ($f.LastWriteTime -gt $e.mtime) { $e.mtime = $f.LastWriteTime }
-      if ($f.Name -in 'addon.gproj','meta','resourceDatabase.rdb') { $e.assembled++ }
-    }
+    } catch { }   # an unreadable folder must not take the dashboard down
   }
   foreach ($e in $map.Values) { $e.assembled = ($e.assembled -eq 3) }
   $script:dirCache = $map; $script:dirCacheAt = Get-Date

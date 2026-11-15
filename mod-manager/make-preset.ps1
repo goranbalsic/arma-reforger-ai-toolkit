@@ -1,11 +1,12 @@
 # Build an Arma Reforger launcher preset from a server's real modlist.
 #   .\make-preset.ps1 -ServerId <server guid>     # or no argument for ArmaDudes 1
-# The preset block MUST go inside SCR_WorkshopAddonManagerPresetStorage - a block
-# appended after it gets dropped by the game (that is what killed the 01:13
-# attempt; the 02:41 save wiped it). Only mods already installed locally are
-# included: the launcher deletes preset entries it cannot resolve, so uninstalled
-# workshop items would poison the whole preset on exit. Re-run when the batch
-# finishes to pick up the rest.
+# The preset MUST be a child of m_aPresets { } inside
+# SCR_WorkshopAddonManagerPresetStorage. A preset written directly into the
+# storage block is silently dropped on the next game save (verified against a
+# real conf: the block vanished and only hand-made presets survived).
+# Only mods already installed locally are included: the launcher deletes preset
+# entries it cannot resolve, so uninstalled workshop items would poison the whole
+# preset on exit. Re-run when the batch finishes to pick up the rest.
 param([string]$ServerId, [string]$ConfPath)
 $ErrorActionPreference = 'Stop'
 $Data = if ($env:RFMM_DATA) { $env:RFMM_DATA } else { Join-Path $PSScriptRoot 'data' }
@@ -23,16 +24,26 @@ if (Get-Process ArmaReforgerSteam -ErrorAction SilentlyContinue) { throw 'Game i
 
 $text = [IO.File]::ReadAllText($conf)
 
-# the preset storage is the LAST m_iVersion 1 in the conf (other blocks have
-# their own) - anchor on the storage declaration itself, never on the version
-# line alone: inserting near the top gets the preset dropped by the game
+# anchor on the storage declaration itself, never on a version line: inserting
+# near the top gets the preset dropped by the game
 $sIdx = $text.IndexOf('SCR_WorkshopAddonManagerPresetStorage')
 if ($sIdx -lt 0) { throw 'preset storage block not found in conf' }
-$i = $text.IndexOf('m_iVersion 1', $sIdx)
-if ($i -lt 0) { throw 'preset storage m_iVersion not found in conf' }
-$anchor = 'm_iVersion 1'
 $storage = $text.Substring($sIdx)
 $presetsBefore = ([regex]::Matches($storage, 'SCR_WorkshopAddonPreset "\{[0-9A-F]{16}\}"')).Count
+
+# insert inside m_aPresets { }; create that container when the conf has none yet
+$indent = '   '   # the game indents a preset by 3 spaces inside m_aPresets
+$mp = $text.IndexOf('m_aPresets', $sIdx)
+if ($mp -ge 0) {
+  $ins = $text.IndexOf('{', $mp) + 1
+  $wrapBefore = ''; $wrapAfter = ''
+} else {
+  $i = $text.IndexOf('m_iVersion 1', $sIdx)
+  if ($i -lt 0) { throw 'preset storage m_iVersion not found in conf' }
+  $ins = $i + 'm_iVersion 1'.Length
+  $wrapBefore = "`r`n  m_aPresets {"
+  $wrapAfter = "`r`n  }"
+}
 
 $srv = if ($ServerId) { @($srvs.servers | Where-Object { $_.id -eq $ServerId })[0] }
        else { @($srvs.servers | Where-Object { $_.name -match 'ArmaDudes 1\b' })[0] }
@@ -64,24 +75,28 @@ $presetGuid = (Get-Hash16 "preset:$($srv.id)").ToUpper()
 $metas = foreach ($m in $mods) {
   $g = (Get-Hash16 "meta:$($m.id)").ToUpper()
   $n = $installed[$m.id] -replace '"', ''
-  '   SCR_WorkshopAddonPresetAddonMeta "{' + $g + '}" {' + "`r`n" +
-  '    m_sGuid "' + $m.id + '"' + "`r`n" +
-  '    m_sName "' + $n + '"' + "`r`n" +
-  '   }'
+  $indent + '  SCR_WorkshopAddonPresetAddonMeta "{' + $g + '}" {' + "`r`n" +
+  $indent + '   m_sGuid "' + $m.id + '"' + "`r`n" +
+  $indent + '   m_sName "' + $n + '"' + "`r`n" +
+  $indent + '  }'
 }
-$body = '  SCR_WorkshopAddonPreset "{' + $presetGuid + '}" {' + "`r`n" +
-        '   m_sName "' + $presetName + '"' + "`r`n" +
-        '   m_aAddonsMeta {' + "`r`n" +
+$body = $indent + 'SCR_WorkshopAddonPreset "{' + $presetGuid + '}" {' + "`r`n" +
+        $indent + ' m_sName "' + $presetName + '"' + "`r`n" +
+        $indent + ' m_aAddonsMeta {' + "`r`n" +
         (($metas -join "`r`n") + "`r`n") +
-        '   }' + "`r`n" +
-        '  }'
+        $indent + ' }' + "`r`n" +
+        $indent + '}'
 
-[IO.File]::WriteAllText($conf, $text.Insert($i + $anchor.Length, "`r`n" + $body), [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText($conf, $text.Insert($ins, $wrapBefore + "`r`n" + $body + $wrapAfter), [Text.UTF8Encoding]::new($false))
 
 $check = [IO.File]::ReadAllText($conf)
 $open = ([regex]::Matches($check, '\{')).Count
 $close = ([regex]::Matches($check, '\}')).Count
 $presets = ([regex]::Matches($check.Substring($check.IndexOf('SCR_WorkshopAddonManagerPresetStorage')), 'SCR_WorkshopAddonPreset "\{[0-9A-F]{16}\}"')).Count
-"verification: presets=$presets (expected $($presetsBefore + 1)) meta=$($mods.Count) braces=$open/$close"
-if ($presets -ne $presetsBefore + 1 -or $open -ne $close) { throw 'verification failed - restore from the .bak next to the conf' }
+# the preset must sit INSIDE m_aPresets, otherwise the game drops it on save
+$mpAfter = $check.IndexOf('m_aPresets', $check.IndexOf('SCR_WorkshopAddonManagerPresetStorage'))
+$newAt = $check.IndexOf('SCR_WorkshopAddonPreset "{' + $presetGuid + '}"')
+$inside = $mpAfter -ge 0 -and $newAt -gt $mpAfter
+"verification: presets=$presets (expected $($presetsBefore + 1)) inside m_aPresets=$inside meta=$($mods.Count) braces=$open/$close"
+if ($presets -ne $presetsBefore + 1 -or $open -ne $close -or -not $inside) { throw 'verification failed - restore from the .bak next to the conf' }
 "OK - preset '$presetName' with $($mods.Count) installed mods"
