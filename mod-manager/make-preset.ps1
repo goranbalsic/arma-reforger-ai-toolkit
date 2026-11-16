@@ -59,9 +59,13 @@ if ($presetName.Length -gt 60) { $presetName = $presetName.Substring(0, 60).Trim
 $presetName = $presetName -replace '"', "'"
 if ($storage -match ('m_sName "' + [regex]::Escape($presetName) + '"')) { throw "preset '$presetName' already exists - delete it in the launcher first" }
 
+# a folder alone is not an installed addon: UTF-Hesco_6A23267521A13350 exists in
+# this machine's client folder with 0 files, and a preset referencing an id the
+# launcher cannot resolve loses the whole preset. The meta file is what the
+# launcher reads, so require it (see the completion rule in the README).
 $installed = @{}
 Get-ChildItem $clAddons -Directory |
-  Where-Object { $_.Name -match '_([0-9A-F]{16})$' } |
+  Where-Object { $_.Name -match '_([0-9A-F]{16})$' -and (Test-Path (Join-Path $_.FullName 'meta')) } |
   ForEach-Object { $installed[$Matches[1]] = ($_.Name -replace '_[0-9A-F]{16}$', '') }
 $mods = @($srv.mods | Where-Object { $installed.ContainsKey($_.id) })
 $installedCount = $mods.Count
@@ -83,7 +87,7 @@ function Get-Hash16([string]$s) {
   $sha = [System.Security.Cryptography.SHA256]::Create()
   ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($s))) -replace '-', '').Substring(0, 16)
 }
-$presetGuid = (Get-Hash16 "preset:$($srv.id)").ToUpper()
+$presetGuid = (Get-Hash16 "preset:$($srv.id):$presetName").ToUpper()
 $metas = foreach ($m in $mods) {
   $g = (Get-Hash16 "meta:$($m.id)").ToUpper()
   $n = $installed[$m.id] -replace '"', ''
