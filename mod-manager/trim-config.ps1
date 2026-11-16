@@ -16,32 +16,43 @@ function Save-Json($obj, [string]$Path) {
 }
 
 $done = @{}
-$sizes = @{}
-$sp = "$Data\batch1-sizes.json"
-if (Test-Path $sp) { foreach ($p in (Get-Content $sp -Raw | ConvertFrom-Json).mods.PSObject.Properties) { $sizes[$p.Name] = [double]$p.Value.bytes } }
-# same completion rule as Get-HaveIds: markers alone are NOT done - the DS
-# writes them before the paks, so a partial download looks assembled.
-# Marker-only folders with a known size would otherwise be trimmed out of the
-# config and never re-downloaded.
-# same completion rule as Get-HaveIds: size is authoritative when known; markers
-# only for mods whose size we never resolved (several Workshop mods ship without
-# addon.gproj, so a marker test alone would trim them out and re-download forever)
+function Test-AddonComplete([string]$Path) {
+  # the addon's own meta lists every file with its exact size: the one completion
+  # rule (README) shared with the dashboard, the client copy and test-rules.
+  # A stale Workshop size must not decide - it kept finished mods queued forever.
+  $metaPath = Join-Path $Path 'meta'
+  if (-not (Test-Path $metaPath)) { return $false }
+  try {
+    $j = Get-Content $metaPath -Raw -ErrorAction Stop | ConvertFrom-Json
+    $files = @(@($j.meta.versions)[0].package.files)
+    if (-not $files.Count) { return $false }
+    foreach ($f in $files) {
+      if (-not $f.name) { continue }
+      $p = Join-Path $Path $f.name
+      if (-not (Test-Path $p)) { return $false }
+      if ((Get-Item $p).Length -ne [long]$f.size) { return $false }
+    }
+    return $true
+  } catch { return $false }
+}
+# same completion rule as Get-HaveIds in the dashboard: a folder with the 3 marker
+# files but unfinished paks is NOT done (the DS writes the markers first), and a
+# mod whose Workshop size went stale still counts when its meta list matches.
 Get-ChildItem $addons -Directory -ErrorAction SilentlyContinue |
   Where-Object { $_.Name -match '_([0-9A-F]{16})$' } |
   ForEach-Object {
-    $files = Get-ChildItem $_.FullName -File -ErrorAction SilentlyContinue
     $id = $Matches[1]
-    $exp = if ($sizes[$id]) { $sizes[$id] } else { 0 }
-    if ($exp) {
-      $bytes = ($files | Measure-Object Length -Sum).Sum
-      if ([Math]::Abs($bytes - $exp) -le [Math]::Max(2MB, 0.02 * $exp)) { $done[$id] = $true }
-    } elseif (($files | Where-Object { $_.Name -in 'addon.gproj','meta','resourceDatabase.rdb' }).Count -eq 3) {
-      $done[$id] = $true
-    }
+    if (Test-AddonComplete $_.FullName) { $done[$id] = $true }
   }
 "assembled on disk: $($done.Count)"
 
 $j = Get-Content $cfgPath -Raw | ConvertFrom-Json
+if (-not $j -or -not $j.game) {
+  # an empty/truncated config is not a queue: recreate the shell instead of dying
+  # here, which used to leave it 0 bytes and the watchdog restarting a broken DS
+  $j = '{"game":{"mods":[]}}' | ConvertFrom-Json
+  "config was empty or unreadable - recreated"
+}
 $left = @($j.game.mods | Where-Object { -not $done.ContainsKey($_.modId) })
 "config: $(@($j.game.mods).Count) -> remaining: $($left.Count)"
 
@@ -53,7 +64,12 @@ if (-not (Get-Process ArmaReforgerServer -ErrorAction SilentlyContinue)) {
   foreach ($m in $left) {
     $d = Get-ChildItem $addons -Directory -Filter "*_$($m.modId)" -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $d) { continue }
-    if ($d.LastWriteTime -gt (Get-Date).AddMinutes(-15)) { continue }
+    # the newest FILE, not the folder: the DS appends inside <mod>\temp\ and never
+    # touches the directory time, so a 40-minute download looked 40 minutes stale
+    # and got deleted - throwing away every fragment it had fetched
+    $newest = (Get-ChildItem $d.FullName -File -Recurse -ErrorAction SilentlyContinue |
+      Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
+    if (-not $newest -or $newest -gt (Get-Date).AddMinutes(-15)) { continue }
     Remove-Item $d.FullName -Recurse -Force -ErrorAction SilentlyContinue
     "deleted stale partial download: $($d.Name)"
   }

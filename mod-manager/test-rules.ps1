@@ -1,9 +1,9 @@
 # Asserts the LIVE completion rule end-to-end: every mod the dashboard calls
-# "completed" must have all 3 assembly files on disk, be quiet for 2+ minutes,
-# and match its Workshop size. Run while the dashboard is up.
-# Also asserts the inverse: any assembled folder that the dashboard would treat
-# as "have" (resume/queue skip it) must pass the same rule - a folder with the
-# 3 marker files but a wrong size is an incomplete download and must stay queued.
+# "completed" must satisfy the addon's own meta file list (exact name + size per
+# file) and must not have been written to for 2+ minutes. Run while the dashboard
+# is up. Also asserts the inverse: any folder the dashboard would treat as "have"
+# (resume/queue skip it) must pass the same rule, and a partial folder must stay
+# queued - an unqueued partial is never re-downloaded.
 $ErrorActionPreference = 'Stop'
 $Root = if ($env:RFMM_HOME) { $env:RFMM_HOME } else { $PSScriptRoot }
 $Data = if ($env:RFMM_DATA) { $env:RFMM_DATA } else { Join-Path $PSScriptRoot 'data' }
@@ -15,50 +15,58 @@ if (-not (Test-Path $ds)) {
   "set RFMM_HOME/RFMM_DATA to the live install (this run would otherwise test the wrong tree)"
   exit 1
 }
-$sizes = @{}
-foreach ($p in (Get-Content "$Data\batch1-sizes.json" -Raw | ConvertFrom-Json).mods.PSObject.Properties) { $sizes[$p.Name] = $p.Value }
-
 $fail = 0
+function Test-AddonComplete([string]$Path) {
+  # the rule under test: the addon's own meta lists every file with its exact size
+  $metaPath = Join-Path $Path 'meta'
+  if (-not (Test-Path $metaPath)) { return $false }
+  try {
+    $j = Get-Content $metaPath -Raw -ErrorAction Stop | ConvertFrom-Json
+    $files = @(@($j.meta.versions)[0].package.files)
+    if (-not $files.Count) { return $false }
+    foreach ($f in $files) {
+      if (-not $f.name) { continue }
+      $p = Join-Path $Path $f.name
+      if (-not (Test-Path $p)) { return $false }
+      if ((Get-Item $p).Length -ne [long]$f.size) { return $false }
+    }
+    return $true
+  } catch { return $false }
+}
 foreach ($r in $s.recent) {
   $dir = Get-ChildItem $ds -Directory -Filter "*_$($r.id)" -ErrorAction SilentlyContinue | Select-Object -First 1
   if (-not $dir) { "FAIL no folder: $($r.name)"; $fail++; continue }
-  if ($dir.LastWriteTime -gt (Get-Date).AddMinutes(-2)) { "FAIL still changing: $($r.name)"; $fail++ }
-  $exp = if ($sizes[$r.id]) { [double]$sizes[$r.id].bytes } else { 0 }
-  if ($exp) {
-    # size is authoritative; several Workshop mods ship without addon.gproj
-    if ([Math]::Abs($r.b - $exp) -gt [Math]::Max(2MB, 0.02 * $exp)) { "FAIL size off: $($r.name)  expected $exp  disk $($r.b)"; $fail++ }
-  } else {
-    $names = (Get-ChildItem $dir.FullName -File -Recurse -ErrorAction SilentlyContinue).Name
-    $missing = @('addon.gproj', 'meta', 'resourceDatabase.rdb') | Where-Object { $names -notcontains $_ }
-    if ($missing) { "FAIL incomplete (missing: $($missing -join ', ')): $($r.name)"; $fail++ }
-  }
+  # newest file, not the folder: the DS appends inside <mod>\temp\ and never
+  # touches the directory timestamp, so a directory check proves nothing
+  $newest = (Get-ChildItem $dir.FullName -File -Recurse -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
+  if ($newest -and $newest -gt (Get-Date).AddMinutes(-2)) { "FAIL still changing: $($r.name)"; $fail++ }
+  if (-not (Test-AddonComplete $dir.FullName)) { "FAIL meta file list does not match: $($r.name)"; $fail++ }
 }
 
-# folders with all 3 marker files but a size mismatch must NOT be treated as
-# done anywhere (Get-HaveIds rule) - they would otherwise never re-download
+# a folder the dashboard calls complete must not still be queued, and a partial
+# folder must be queued - otherwise nothing ever re-downloads it
 $queuedIds = @()
 $cj = Get-Content "$Data\batch1-serverconfig.json" -Raw | ConvertFrom-Json
 foreach ($m in $cj.game.mods) { $queuedIds += $m.modId }
+# a partial is only recoverable while the dashboard still knows the mod: "Queue
+# all missing" enumerates the sizes map plus every tracked server's modlist
+$tracked = @{}
+foreach ($p in (Get-Content "$Data\batch1-sizes.json" -Raw | ConvertFrom-Json).mods.PSObject.Properties) { $tracked[$p.Name] = $true }
+foreach ($sv in (Get-Content "$Data\batch1-servers.json" -Raw | ConvertFrom-Json).servers) { foreach ($m in $sv.mods) { $tracked[$m.id] = $true } }
 Get-ChildItem $ds -Directory -ErrorAction SilentlyContinue |
   Where-Object { $_.Name -match '_([0-9A-F]{16})$' } |
   ForEach-Object {
     $id = $Matches[1]
-    $exp = if ($sizes[$id]) { [double]$sizes[$id].bytes } else { 0 }
-    # recursive: Get-DirMap sums every file under the mod folder (the DS downloads
-    # into <mod>\temp\), so a top-level-only count failed healthy installs
-    $bytes = (Get-ChildItem $_.FullName -File -Recurse -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
-    if ($exp) {
-      if ([Math]::Abs($bytes - $exp) -le [Math]::Max(2MB, 0.02 * $exp)) { return }   # complete
-    } else {
-      return   # unknown size: cannot judge here
-    }
+    if (Test-AddonComplete $_.FullName) { return }   # complete, nothing to assert
     if ($s.recent.id -contains $id) { "FAIL partial folder counted as completed: $($_.Name)"; $fail++ }
     else {
-      # orphaned: partial but not queued -> trim-config would keep it out and
-      # nothing ever re-downloads it (the bug that stranded 3 AD2 mods)
-      $queued = $queuedIds -contains $id
-      if ($queued) { "note: partial folder on disk, queued for re-download: $($_.Name)" }
-      else { "FAIL partial folder NOT queued (orphaned): $($_.Name)"; $fail++ }
+      # orphaned: partial and nothing will ever re-fetch it (the bug that
+      # stranded 3 AD2 mods). Not being queued right now is fine - Queue all
+      # missing picks it up as long as the dashboard tracks the mod.
+      if ($queuedIds -contains $id) { "note: partial folder on disk, queued for re-download: $($_.Name)" }
+      elseif ($tracked.ContainsKey($id)) { "note: partial folder on disk, 'Queue all missing' re-fetches it: $($_.Name)" }
+      else { "FAIL partial folder not tracked by any server or size entry: $($_.Name)"; $fail++ }
     }
   }
 # the served page script must be syntactically valid: one stray bracket leaves

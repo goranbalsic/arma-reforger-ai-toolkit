@@ -67,6 +67,7 @@ $script:rateSamples = @()                                      # rolling byte-ra
 $script:activeMax = @{}                                        # per-mod high-water progress
 $script:exactCache = @{}                                       # path -> exact package check
 $script:logCache = $null; $script:logCacheAt = (Get-Date).AddMinutes(-1)
+$script:speedCache = @{ b = 0; age = 999 }; $script:speedCacheAt = (Get-Date).AddMinutes(-5)
 
 $ApiBase = 'https://api.reforgermods.net/v2'
 $ApiH = @{ 'User-Agent' = 'arma-reforger-ai-toolkit/1.0' }
@@ -97,35 +98,23 @@ $script:dirCache = $null; $script:dirCacheAt = (Get-Date).AddMinutes(-10)
 $script:clCache = @(); $script:clCacheAt = (Get-Date).AddMinutes(-10)
 
 function Get-ClientIds {
-  # fast completeness scan for the live status (size rule, no meta parsing):
-  # the exact per-file check is used by Get-HaveIds / verify / resume instead.
-  # One recursive enumeration (~85 ms) - a per-folder loop costs 5x that.
+  # exact rule (the addon's own meta file list), same as Get-HaveIds and verify.
+  # The old ±2 MB folder-size tolerance reported mods as installed when only a
+  # fifth of their paks were on disk (WCS_LoadoutEditor: 202 KB there, 921 KB
+  # expected), so the dashboard said 980/980 over a broken client copy.
+  # Cost is paid once: Test-AddonComplete caches per folder + mtime.
   if (((Get-Date) - $script:clCacheAt).TotalSeconds -lt 10) { return $script:clCache }
-  $ids = @()
+  $ids = [Collections.Generic.List[string]]::new()
   $root = [IO.DirectoryInfo]::new("$env:USERPROFILE\Documents\My Games\ArmaReforger\addons")
   if ($root.Exists) {
-    $baseLen = $root.FullName.TrimEnd('\').Length + 1
-    $sum = @{}
     foreach ($d in $root.EnumerateDirectories()) {
-      if ($d.Name -match '_([0-9A-F]{16})$') { $sum[$d.Name] = [double]0 }
+      $m = [regex]::Match($d.Name, '_([0-9A-F]{16})$')
+      if (-not $m.Success) { continue }
+      if (Test-AddonComplete $d.FullName $d.LastWriteTime) { $ids.Add($m.Groups[1].Value) }
     }
-    try {
-      foreach ($f in $root.EnumerateFiles('*', [IO.SearchOption]::AllDirectories)) {
-        $rel = $f.FullName.Substring($baseLen); $cut = $rel.IndexOf('\')
-        if ($cut -lt 0) { continue }
-        $n = $rel.Substring(0, $cut)
-        if ($sum.ContainsKey($n)) { $sum[$n] += $f.Length }
-      }
-    } catch { }
-    $ids = @(foreach ($n in $sum.Keys) {
-      $id = [regex]::Match($n, '_([0-9A-F]{16})$').Groups[1].Value
-      $sm = $sizeMap[$id]; $exp = if ($sm) { [double]$sm.bytes } else { 0 }
-      if (-not $exp) { $id; continue }
-      if ([Math]::Abs($sum[$n] - $exp) -le [Math]::Max(2MB, 0.02 * $exp)) { $id }
-    })
   }
-  $script:clCache = $ids; $script:clCacheAt = Get-Date
-  $ids
+  $script:clCache = $ids.ToArray(); $script:clCacheAt = Get-Date
+  $script:clCache
 }
 
 function Test-AddonComplete([string]$Path, $Mtime) {
@@ -159,7 +148,9 @@ function Get-DirMap {
   # one .NET enumeration pass, grouped by folder: 111 ms for 6k files where
   # Get-ChildItem -Recurse took 236 ms. mtime = the folder's newest file time:
   # the DS appends to preallocated chunks without touching directory times.
-  if (((Get-Date) - $script:dirCacheAt).TotalSeconds -lt 0.5) { return $script:dirCache }
+  # 3 s, not 0.5: a cold /status took longer than its own cache TTL, so with the
+  # page polling every ~0.4 s the cache never hit and every poll rescanned the disk
+  if (((Get-Date) - $script:dirCacheAt).TotalSeconds -lt 3) { return $script:dirCache }
   $map = @{}
   $root = [IO.DirectoryInfo]::new($Addons)
   if ($root.Exists) {
@@ -196,18 +187,26 @@ function Get-GlobalSpeed {
   # the DS prints its own "Download speed" once per mod (measured 30 s+ apart)
   # and preallocated chunk files make a disk-byte delta useless (0 B growth while
   # downloading) - so return the number WITH its age and let the page say how old
+  # it is. Cached 3 s: this runs on every /status poll (~0.4 s apart) and reading
+  # 200 log lines each time cost ~80 ms of the single listener thread.
+  if (((Get-Date) - $script:speedCacheAt).TotalSeconds -lt 3) { return $script:speedCache }
+  $res = @{ b = 0; age = 999 }
   $lg = Get-Log
-  if (-not $lg -or $lg.LastWriteTime -lt (Get-Date).AddMinutes(-2)) { return @{ b = 0; age = 999 } }
-  $line = Get-Content $lg.FullName -Tail 200 | Select-String 'Download speed ([0-9.]+) KB/s' | Select-Object -Last 1
-  if (-not $line) { return @{ b = 0; age = 999 } }
-  $b = [Math]::Round([double]$line.Matches[0].Groups[1].Value * 1024)
-  $age = 999
-  try {
-    $ts = [datetime]::ParseExact($line.Line.Substring(0, 8), 'HH:mm:ss', $null)
-    if ($ts -gt (Get-Date).AddMinutes(1)) { $ts = $ts.AddDays(-1) }   # log line from before midnight
-    $age = [Math]::Round(((Get-Date) - $ts).TotalSeconds)
-  } catch { }
-  @{ b = $b; age = $age }
+  if ($lg -and $lg.LastWriteTime -ge (Get-Date).AddMinutes(-2)) {
+    $line = Get-Content $lg.FullName -Tail 200 | Select-String 'Download speed ([0-9.]+) KB/s' | Select-Object -Last 1
+    if ($line) {
+      $b = [Math]::Round([double]$line.Matches[0].Groups[1].Value * 1024)
+      $age = 999
+      try {
+        $ts = [datetime]::ParseExact($line.Line.Substring(0, 8), 'HH:mm:ss', $null)
+        if ($ts -gt (Get-Date).AddMinutes(1)) { $ts = $ts.AddDays(-1) }   # log line from before midnight
+        $age = [Math]::Round(((Get-Date) - $ts).TotalSeconds)
+      } catch { }
+      $res = @{ b = $b; age = $age }
+    }
+  }
+  $script:speedCache = $res; $script:speedCacheAt = Get-Date
+  $res
 }
 
 function Get-Status {
@@ -259,10 +258,12 @@ function Get-Status {
   foreach ($e in $dirs.GetEnumerator()) {
     $d = $e.Value
     if ($d.mtime -gt $now.AddMinutes(-2)) { continue }   # still being written
-    $sm = $sizeMap[$e.Key]; $exp = if ($sm) { [double]$sm.bytes } else { 0 }
-    if ($exp) {
-      if ([Math]::Abs($d.bytes - $exp) -gt [Math]::Max(2MB, 0.02 * $exp)) { continue }
-    } elseif (-not $d.assembled) { continue }
+    # the addon's own meta file list decides - the one rule (README), same as
+    # Get-HaveIds/verify/trim. The Workshop size in $sizeMap goes stale when a mod
+    # updates; SagesFramework sat at 203 MB there while 268 MB was on disk, so a
+    # finished mod stayed "missing" forever: it held the queue open, the DS saw it
+    # installed and served a world, and the watchdog restarted it every 5 min.
+    if (-not (Test-AddonComplete $d.path $d.mtime)) { continue }
     $completed[$e.Key] = $true
   }
   $doneCount = @($sizeMap.Keys | Where-Object { $completed.ContainsKey($_) -or $clSet.ContainsKey($_) }).Count
