@@ -18,6 +18,12 @@ $base = 'https://api.reforgermods.net/v2'
 $cfgPath = "$Data\batch1-serverconfig.json"
 $sizesPath = "$Data\batch1-sizes.json"
 $serversPath = "$Data\batch1-servers.json"
+function Save-Json($obj, [string]$Path, [int]$Depth = 5) {
+  # atomic: a kill during Set-Content leaves json the dashboard cannot parse
+  $tmp = "$Path.tmp"
+  $obj | ConvertTo-Json -Depth $Depth | Set-Content $tmp -Encoding UTF8
+  if (Test-Path $Path) { [IO.File]::Replace($tmp, $Path, [NullString]::Value) } else { Move-Item $tmp $Path -Force }
+}
 $dsAddons = "$Root\serverprofile\addons"
 $clAddons = "$env:USERPROFILE\Documents\My Games\ArmaReforger\addons"
 
@@ -39,23 +45,43 @@ $sizeMap = @{}
 $sizes.mods.PSObject.Properties | ForEach-Object { $sizeMap[$_.Name] = [double]$_.Value.bytes }
 $have = @{}
 $j.game.mods | ForEach-Object { $have[$_.modId] = $true }
-# on disk only when the size matches: the DS writes the 3 marker files before
-# the data paks, so a folder alone can be a partial download
+# on disk only when the addon's own file list matches: the DS writes the marker
+# files before the data paks, so a folder alone can be a partial download, and a
+# mod with no resolved size used to count as installed as soon as ANY folder (even
+# a 0-byte stub) existed - so it was never queued.
+function Test-AddonComplete([string]$Path) {
+  $metaPath = Join-Path $Path 'meta'
+  if (-not (Test-Path $metaPath)) { return $false }
+  try {
+    $mj = Get-Content $metaPath -Raw -ErrorAction Stop | ConvertFrom-Json
+    $files = @(@($mj.meta.versions)[0].package.files)
+    if (-not $files.Count) { return $false }
+    foreach ($f in $files) {
+      if (-not $f.name) { continue }
+      $p = Join-Path $Path $f.name
+      if (-not (Test-Path $p)) { return $false }
+      if ((Get-Item $p).Length -ne [long]$f.size) { return $false }
+    }
+    return $true
+  } catch { return $false }
+}
 foreach ($root in @($dsAddons, $clAddons)) {
   Get-ChildItem $root -Directory -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -match '_([0-9A-F]{16})$' } |
     ForEach-Object {
-      $id = $Matches[1]; $exp = $sizeMap[$id]
-      $bytes = (Get-ChildItem $_.FullName -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
-      if (-not $exp -or [Math]::Abs($bytes - $exp) -le [Math]::Max(2MB, 0.02 * $exp)) { $have[$id] = $true }
+      if (Test-AddonComplete $_.FullName) { $have[$Matches[1]] = $true }
     }
 }
 $new = @($d.server.mods | Where-Object { -not $have.ContainsKey($_.id) })
 "covered: $(@($d.server.mods).Count - $new.Count)   new to download: $($new.Count)"
 if (-not $new) { 'nothing to add'; exit 0 }
 
+if (Get-Process ArmaReforgerServer -ErrorAction SilentlyContinue) {
+  # the DS rewrites the config on exit: appending to it now would be discarded
+  throw 'downloader is running - press Pause in the dashboard first'
+}
 $j.game.mods = @($j.game.mods) + @($new | ForEach-Object { [PSCustomObject]@{ modId = $_.id; name = $_.name } })
-$j | ConvertTo-Json -Depth 5 | Set-Content $cfgPath -Encoding UTF8
+Save-Json $j $cfgPath
 "config now: $(@($j.game.mods).Count) remaining mods"
 
 # real sizes straight from the server detail; zero placeholder when unknown
@@ -70,8 +96,8 @@ foreach ($m in $new) {
 }
 $total = ($sizes.mods.PSObject.Properties | ForEach-Object { [double]$_.Value.bytes } | Measure-Object -Sum).Sum
 $sizes.totalBytes = [double]$total
-$sizes | ConvertTo-Json -Depth 4 | Set-Content $sizesPath -Encoding UTF8
-"sizes added: $added ($($added - ($new | Where-Object { $_.sizeKnown }).Count) still unknown; fix-sizes.ps1 fills them)"
+Save-Json $sizes $sizesPath 4
+"$added sizes added, $(@($new | Where-Object { -not ($_.sizeKnown -and $_.size) }).Count) still unknown (fix-sizes.ps1 fills them)"
 
 # remember the server so it shows in the dashboard and can get a preset
 $doc = Get-Content $serversPath -Raw | ConvertFrom-Json
@@ -85,6 +111,6 @@ if (-not @($doc.servers | Where-Object { $_.id -eq $srvId })) {
     [PSCustomObject]@{ id = $m.id; name = $m.name; e = $e }
   })
   $doc.servers = @($doc.servers) + @([PSCustomObject]@{ id = $srvId; name = $d.server.name; key = $key; mods = $mods })
-  $doc | ConvertTo-Json -Depth 6 | Set-Content $serversPath -Encoding UTF8
+  Save-Json $doc $serversPath 6
   "tracked: $($d.server.name)"
 }
