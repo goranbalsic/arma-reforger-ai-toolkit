@@ -42,6 +42,7 @@ $mutex = [System.Threading.Mutex]::new($false, 'ReforgerDownloaderWatchdog')
 if (-not $mutex.WaitOne(0)) { exit 0 }
 
 $fail = @{}
+$saidEmpty = $false   # "queue empty" is logged once per transition, not every 15 s
 while ($true) {
   Start-Sleep 15
   if (-not (Test-Path $Cfg)) { continue }
@@ -50,17 +51,31 @@ while ($true) {
   $ds = @(Get-Process ArmaReforgerServer -ErrorAction SilentlyContinue)
 
   if (-not $ds.Count) {
-    if ($queued.Count -eq 0) { continue }         # nothing left to download
+    if ($queued.Count -eq 0) {
+      # log the transition only: this branch runs every 15 s forever once the
+      # batch is done, and used to grow watchdog.log without bound
+      if (-not $saidEmpty) { Write-Wd 'queue empty - downloader done'; $saidEmpty = $true }
+      continue
+    }
+    $saidEmpty = $false
 
-    # remember Workshop failures from the run that just ended, drop repeat offenders
+    # remember Workshop refusals from the run that just ended, drop repeat
+    # offenders. Blame ONLY the mod that was being fetched when the Workshop
+    # refused it: the old code struck every mod named in the last 80 lines, so one
+    # bad patch of network could remove innocent mods from the queue for good.
+    # "Fragmentizer: Download error" is not a refusal - the DS retries it itself.
     $lg = Get-LatestLog
     if ($lg -and $lg.LastWriteTime -gt (Get-Date).AddMinutes(-20)) {
       $tail = @(Get-Content $lg.FullName -Tail 80 -ErrorAction SilentlyContinue)
-      if (@($tail | Select-String 'Failed to fetch addon details|Fragmentizer: Download error').Count) {
-        foreach ($id in @($tail | Select-String 'Addon Download started ([0-9A-F]{16})' |
-                          ForEach-Object { $_.Matches[0].Groups[1].Value } | Select-Object -Unique)) {
-          if ($fail.ContainsKey($id)) { $fail[$id]++ } else { $fail[$id] = 1 }
+      $cur = $null
+      foreach ($ln in $tail) {
+        if ($ln -match 'Addon Download started ([0-9A-F]{16})') { $cur = $Matches[1]; continue }
+        if ($cur -and $ln -match 'Failed to fetch addon details') {
+          if ($fail.ContainsKey($cur)) { $fail[$cur]++ } else { $fail[$cur] = 1 }
+          $cur = $null
         }
+      }
+      if ($fail.Count) {
         $drop = @($fail.Keys | Where-Object { $fail[$_] -ge 3 })
         if ($drop.Count) {
           $j = Get-Content $Cfg -Raw | ConvertFrom-Json
@@ -80,7 +95,10 @@ while ($true) {
     try { & "$PSScriptRoot\trim-config.ps1" | Out-Null }
     catch { Write-Wd "trim failed: $($_.Exception.Message)"; continue }   # never start an untrimmed list (1 MB trap)
     $queued = Get-Queued
-    if ($queued.Count -eq 0) { Write-Wd 'queue empty - downloader done'; continue }
+    if ($queued.Count -eq 0) {
+      if (-not $saidEmpty) { Write-Wd 'queue empty - downloader done'; $saidEmpty = $true }
+      continue
+    }
     Start-Process -FilePath $Exe -ArgumentList "-config `"$Cfg`" -profile `"$Profile`"" `
       -WorkingDirectory "$Root\armar-server" -WindowStyle Hidden
     Write-Wd "restarted downloader ($($queued.Count) mods left)"
@@ -96,6 +114,10 @@ while ($true) {
       Write-Wd "downloader silent 5 min with $($queued.Count) mods queued - restarting it"
       $ds | Stop-Process -Force
       Start-Sleep 2
+      # trim before restarting: a finished mod left in the list pushes the download
+      # request over the DS's ~1 MB limit, and the restart would insta-crash
+      try { & "$PSScriptRoot\trim-config.ps1" | Out-Null }
+      catch { Write-Wd "trim failed: $($_.Exception.Message)" }
       Start-Process -FilePath $Exe -ArgumentList "-config `"$Cfg`" -profile `"$Profile`"" `
         -WorkingDirectory "$Root\armar-server" -WindowStyle Hidden
     }
