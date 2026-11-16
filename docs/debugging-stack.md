@@ -34,6 +34,10 @@ gate - `PSAvoidAssignmentToAutomaticVariable` is the one to watch by hand.
 Notes:
 - **There is no `p/powershell` ruleset** (it returns HTTP 404). Use `p/ci`,
   `p/secrets`, `p/python`; `p/default` also works.
+- gitleaks prints `skipping file: too large` for `context/manifests.json` on
+  every run. That is the 2 MB generated mod index, not a finding; gitleaks 8.30
+  has no path-exclude flag and the size skip happens before any allowlist, so
+  the warning is expected output.
 - Trivy downloads a ~100 MB vulnerability DB on first use. On a slow link this
   times out (`failed to download vulnerability DB`) and is **not** a code
   finding - run it when the link is idle, or use `osv-scanner` instead.
@@ -148,3 +152,4 @@ read-only where possible, and never paste secrets into the config - use
 | uv | installed | used for `uvx semgrep` / `semgrep-mcp` |
 | dotnet | installed | for the WPF app |
 | Pester | 3.4.0 | old; `Install-Module Pester -Force -SkipPublisherCheck` for v5 |
+
