@@ -56,10 +56,15 @@ if (-not $mutex.WaitOne(0)) { exit 0 }
 $fail = @{}
 $saidEmpty = $false   # "queue empty" is logged once per transition, not every 15 s
 $saidBlind = $false   # same for "cannot read the process list"
+$saidPause = $false   # and for "paused": silent skipping looked exactly like a hung watchdog
 while ($true) {
   Start-Sleep 15
   if (-not (Test-Path $Cfg)) { continue }
-  if (Test-Path $PauseFlag) { continue }          # user pressed Pause
+  if (Test-Path $PauseFlag) {
+    if (-not $saidPause) { Write-Wd 'paused - not restarting anything until the queue is started again'; $saidPause = $true }
+    continue
+  }
+  if ($saidPause) { Write-Wd 'pause cleared - watching again'; $saidPause = $false }
   $queued = Get-Queued
   $ds = Get-OwnEngine $Cfg
   # log the transition, not every tick: a busy machine made this fire 25 times in a
@@ -122,7 +127,7 @@ while ($true) {
       continue
     }
     if (-not (Start-EngineLocked)) { Write-Wd 'a start/stop is in progress - retrying next tick'; continue }
-    Write-Wd "restarted downloader ($($queued.Count) mods left)"
+    Write-Wd "restarted downloader ($(@($queued).Count) mods left)"
     continue
   }
 
