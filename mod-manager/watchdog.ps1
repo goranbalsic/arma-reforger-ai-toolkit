@@ -9,6 +9,7 @@
 $ErrorActionPreference = 'Continue'
 $Root = if ($env:RFMM_HOME) { $env:RFMM_HOME } else { $PSScriptRoot }
 $Data = if ($env:RFMM_DATA) { $env:RFMM_DATA } else { Join-Path $PSScriptRoot 'data' }
+. "$PSScriptRoot\state.ps1"
 $Cfg = "$Data\batch1-serverconfig.json"
 $Exe = "$Root\armar-server\ArmaReforgerServer.exe"
 $DsProfile = "$Root\serverprofile"
@@ -17,13 +18,6 @@ $PauseFlag = "$Data\paused.flag"
 $SkipFile = "$Data\skipped.json"
 
 function Write-Wd([string]$t) { try { "[$(Get-Date -f HH:mm:ss)] $t" | Add-Content $LogFile } catch { } }
-function Save-Json($obj, [string]$Path) {
-  # atomic: this runs while the dashboard may be reading the same files, and a
-  # kill mid-write would leave a config/queue the dashboard cannot parse
-  $tmp = "$Path.tmp"
-  $obj | ConvertTo-Json -Depth 5 | Set-Content $tmp -Encoding UTF8
-  if (Test-Path $Path) { [IO.File]::Replace($tmp, $Path, [NullString]::Value) } else { Move-Item $tmp $Path -Force }
-}
 function Get-Queued {
   try {
     $m = (Get-Content $Cfg -Raw | ConvertFrom-Json).game.mods
@@ -41,6 +35,27 @@ function Get-LatestLog {
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
 }
 
+function Get-Engine {
+  # ONLY our engine. The user may run a community server with the same process
+  # name, and the stall killer below must never kill it - start it filtered by our
+  # own config path.
+  @(Get-CimInstance Win32_Process -Filter "Name='ArmaReforgerServer.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($Cfg, [StringComparison]::OrdinalIgnoreCase) -ge 0 } |
+    ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue })
+}
+function Start-EngineLocked {
+  # the dashboard can start the engine at the same moment: a named mutex + a
+  # re-check means never two processes on one profile
+  $ctl = Lock-Engine
+  if (-not $ctl) { return $false }
+  try {
+    if (Get-Engine) { return $false }
+    Start-Process -FilePath $Exe -ArgumentList "-config `"$Cfg`" -profile `"$DsProfile`"" `
+      -WorkingDirectory "$Root\armar-server" -WindowStyle Hidden
+    return $true
+  } finally { $ctl.ReleaseMutex() }
+}
+
 $mutex = [System.Threading.Mutex]::new($false, 'ReforgerDownloaderWatchdog')
 if (-not $mutex.WaitOne(0)) { exit 0 }
 
@@ -51,7 +66,7 @@ while ($true) {
   if (-not (Test-Path $Cfg)) { continue }
   if (Test-Path $PauseFlag) { continue }          # user pressed Pause
   $queued = Get-Queued
-  $ds = @(Get-Process ArmaReforgerServer -ErrorAction SilentlyContinue)
+  $ds = Get-Engine
 
   if (-not $ds.Count) {
     if ($queued.Count -eq 0) {
@@ -63,16 +78,14 @@ while ($true) {
     }
     $saidEmpty = $false
 
-    # remember Workshop refusals from the run that just ended, drop repeat
-    # offenders. Blame ONLY the mod that was being fetched when the Workshop
-    # refused it: the old code struck every mod named in the last 80 lines, so one
-    # bad patch of network could remove innocent mods from the queue for good.
-    # "Fragmentizer: Download error" is not a refusal - the DS retries it itself.
+    # remember Workshop refusals from the run that just ended. Walk the WHOLE run
+    # log: a refusal follows the "started" line of the mod that caused it, and a
+    # run logs ~20 "started" lines, so a last-80-lines window usually held none and
+    # the skip almost never fired (the 5-minute stall killer did the work instead).
     $lg = Get-LatestLog
     if ($lg -and $lg.LastWriteTime -gt (Get-Date).AddMinutes(-20)) {
-      $tail = @(Get-Content $lg.FullName -Tail 80 -ErrorAction SilentlyContinue)
       $cur = $null
-      foreach ($ln in $tail) {
+      foreach ($ln in (Get-Content $lg.FullName -ErrorAction SilentlyContinue)) {
         if ($ln -match 'Addon Download started ([0-9A-F]{16})') { $cur = $Matches[1]; continue }
         if ($cur -and $ln -match 'Failed to fetch addon details') {
           if ($fail.ContainsKey($cur)) { $fail[$cur]++ } else { $fail[$cur] = 1 }
@@ -103,8 +116,7 @@ while ($true) {
       if (-not $saidEmpty) { Write-Wd 'queue empty - downloader done'; $saidEmpty = $true }
       continue
     }
-    Start-Process -FilePath $Exe -ArgumentList "-config `"$Cfg`" -profile `"$DsProfile`"" `
-      -WorkingDirectory "$Root\armar-server" -WindowStyle Hidden
+    if (-not (Start-EngineLocked)) { Write-Wd 'a start/stop is in progress - retrying next tick'; continue }
     Write-Wd "restarted downloader ($($queued.Count) mods left)"
     continue
   }
@@ -122,8 +134,7 @@ while ($true) {
       # request over the DS's ~1 MB limit, and the restart would insta-crash
       try { & "$PSScriptRoot\trim-config.ps1" | Out-Null }
       catch { Write-Wd "trim failed: $($_.Exception.Message)" }
-      Start-Process -FilePath $Exe -ArgumentList "-config `"$Cfg`" -profile `"$DsProfile`"" `
-        -WorkingDirectory "$Root\armar-server" -WindowStyle Hidden
+      $null = Start-EngineLocked
     }
   }
 }

@@ -24,28 +24,10 @@ if (-not (Test-Path $Sizes))       { '{"totalBytes":0,"mods":{}}' | Set-Content 
 if (-not (Test-Path $Cfg))         { '{"game":{"mods":[]}}'     | Set-Content $Cfg -Encoding UTF8 }
 if (-not (Test-Path $ServersPath)) { '{"servers":[]}'           | Set-Content $ServersPath -Encoding UTF8 }
 
-function Save-Json($obj, [string]$Path, [int]$Depth = 5) {
-  # atomic: Set-Content truncates in place, so a kill mid-write (closing the
-  # console window kills this process) left broken JSON and the next start died
-  # on it. Replace is atomic on the same volume; the DS holds no handle on these.
-  $tmp = "$Path.tmp"
-  $obj | ConvertTo-Json -Depth $Depth | Set-Content $tmp -Encoding UTF8
-  if (Test-Path $Path) { [IO.File]::Replace($tmp, $Path, [NullString]::Value) } else { Move-Item $tmp $Path -Force }
-}
-function Read-Json([string]$Path, $Default) {
-  # an unreadable state file must never brick the start: a parse failure means
-  # the file is gone, so quarantine it (never delete) and carry on with defaults.
-  # An IO error is not a parse error - retry later and leave the file alone.
-  if (-not (Test-Path $Path)) { return $Default }
-  try { $raw = Get-Content $Path -Raw -ErrorAction Stop } catch { return $Default }
-  try { return ($raw | ConvertFrom-Json) }
-  catch {
-    $bad = "$Path.corrupt-$(Get-Date -f yyyyMMdd-HHmmss)"
-    Move-Item $Path $bad -Force -ErrorAction SilentlyContinue
-    Write-Host "WARNING: $([IO.Path]::GetFileName($Path)) was unreadable - moved to $(Split-Path $bad -Leaf), using defaults" -ForegroundColor Red
-    return $Default
-  }
-}
+# shared helpers (Save-Json, Read-Json, Test-AddonComplete): one copy for every
+# script, so the completion rule cannot drift between the app, the trim and the test
+. "$PSScriptRoot\state.ps1"
+
 function Get-Cfg {
   $j = Read-Json $Cfg ('{"game":{"mods":[]}}' | ConvertFrom-Json)
   if ($null -eq $j -or $null -eq $j.game) { $j = '{"game":{"mods":[]}}' | ConvertFrom-Json }
@@ -105,6 +87,7 @@ function Get-Log {
 $script:dirCache = $null; $script:dirCacheAt = (Get-Date).AddMinutes(-10)
 $script:clCache = @(); $script:clCacheAt = (Get-Date).AddMinutes(-10)
 $script:clBytes = [double]0; $script:clBytesAt = (Get-Date).AddMinutes(-10)
+$script:haveCache = @{}; $script:haveAt = (Get-Date).AddMinutes(-10)
 
 function Get-AddonsBytes {
   # total size of the game's addons folder. The page shows this as "done", so the
@@ -139,32 +122,6 @@ function Get-ClientIds {
   $script:clCache
 }
 
-function Test-AddonComplete([string]$Path, $Mtime) {
-  # Exact check against the addon's own meta: versions[0].package.files lists
-  # every file with its size, and the game itself uses it. Folder totals are a
-  # bad proxy (a 2 MB tolerance let partial small mods pass as installed).
-  $c = $script:exactCache[$Path]
-  if ($c -and $c.mtime -eq $Mtime) { return $c.ok }
-  $ok = $false
-  $metaPath = Join-Path $Path 'meta'
-  if (Test-Path $metaPath) {
-    try {
-      $j = Get-Content $metaPath -Raw -ErrorAction Stop | ConvertFrom-Json
-      $files = @(@($j.meta.versions)[0].package.files)
-      if ($files.Count -gt 0) {
-        $ok = $true
-        foreach ($f in $files) {
-          if (-not $f.name) { continue }
-          $p = Join-Path $Path $f.name
-          if (-not (Test-Path $p)) { $ok = $false; break }
-          if ((Get-Item $p).Length -ne [long]$f.size) { $ok = $false; break }
-        }
-      }
-    } catch { $ok = $false }
-  }
-  $script:exactCache[$Path] = @{ mtime = $Mtime; ok = $ok }
-  $ok
-}
 
 function Get-DirMap {
   # one .NET enumeration pass, grouped by folder: 111 ms for 6k files where
@@ -344,52 +301,53 @@ if ($Check) {
   exit 0
 }
 
+
 function Start-DS {
   $script:pausedByUser = $false
   Remove-Item (Join-Path $Data 'paused.flag') -Force -ErrorAction SilentlyContinue
-  if (Get-DS) { return 'already running' }
-  # resume interrupted work: a partial download is not in the queue after Clear
-  # queue, but Start / Resume should continue it instead of saying "empty"
-  $j0 = Get-Cfg
-  if (@($j0.game.mods).Count -eq 0) {
-    $partial = @(Get-PartialMods)
-    if ($partial.Count) {
-      $j0.game.mods = $partial
-      Save-Json $j0 $Cfg
-      Write-Host "resuming $($partial.Count) unfinished download(s)" -ForegroundColor Cyan
+  $ctl = Lock-Engine
+  if (-not $ctl) { return 'another start/stop is in progress - try again' }
+  try {
+    if (Get-DS) { return 'already running' }
+    # resume interrupted work: a partial download is not in the queue after Clear
+    # queue, but Start / Resume should continue it instead of saying "empty"
+    $j0 = Get-Cfg
+    if (@($j0.game.mods).Count -eq 0) {
+      $partial = @(Get-PartialMods)
+      if ($partial.Count) {
+        $j0.game.mods = $partial
+        Save-Json $j0 $Cfg
+        Write-Host "resuming $($partial.Count) unfinished download(s)" -ForegroundColor Cyan
+      }
     }
-  }
-  # the 1 MB download-list trap: trimming is lossless (DS skips done mods anyway),
-  # skipping it makes the DS insta-crash ~30 s after a false "started"
-  & "$PSScriptRoot\trim-config.ps1" | Out-Null
-  # nothing left after the trim: starting the DS here leaves a game server running
-  # a world forever, doing no work ("Queue all missing" with nothing missing did
-  # exactly that, and the watchdog then never touches it because the queue is empty)
-  $left = @((Get-Cfg).game.mods).Count
-  if ($left -eq 0) { return 'nothing to download - the queue is empty' }
-  $dsArgs = "-config `"$Cfg`" -profile `"$DsProfile`""
-  foreach ($try in 1, 2) {
-    Start-Process -FilePath $Exe -ArgumentList $dsArgs `
+    # the 1 MB download-list trap: trimming is lossless (the DS skips done mods
+    # anyway); skipping it makes the DS insta-crash ~30 s after a false "started"
+    & "$PSScriptRoot\trim-config.ps1" | Out-Null
+    # nothing left after the trim: starting the DS here leaves a game server
+    # running a world forever, doing no work
+    $left = @((Get-Cfg).game.mods).Count
+    if ($left -eq 0) { return 'nothing to download - the queue is empty' }
+    Start-Process -FilePath $Exe -ArgumentList "-config `"$Cfg`" -profile `"$DsProfile`"" `
       -WorkingDirectory "$Root\armar-server" -WindowStyle Hidden
-    Start-Sleep 25   # the DS either settles into downloading or dies within ~20 s
-    if (Get-DS) { return 'started' }
-  }
-  $lg = Get-Log
-  $why = if ($lg) { @(Get-Content $lg.FullName -Tail 20 -ErrorAction SilentlyContinue |
-    Select-String 'error|ERROR' | Select-Object -Last 2 | ForEach-Object { $_.Line.Trim() }) -join ' | ' }
-  "FAILED to start$(if ($why) { " - last log: $why" } else { ' - no log written, check serverprofile\logs' })"
+    # no 25 s sleep here: it froze the only HTTP thread (and the mirror with it).
+    # The watchdog restarts a DS that dies within ~20 s, and /status shows the truth.
+    'started - progress is on the page (a failed start is retried by the watchdog)'
+  } finally { $ctl.ReleaseMutex() }
 }
 
 function Stop-DS {
   $script:pausedByUser = $true   # the watchdog must not undo an explicit pause
   New-Item -ItemType File -Force (Join-Path $Data 'paused.flag') | Out-Null
-  $p = Get-DS
-  if (-not $p) { return 'not running' }
-  $p | Stop-Process -Force
-  # wait for the process to actually die: a 1 s sleep can be too short, and
-  # Start-DS would then see the dying process and report "already running"
-  foreach ($i in 1..20) { if (-not (Get-DS)) { break }; Start-Sleep -Milliseconds 500 }
-  'paused - progress kept'
+  $ctl = Lock-Engine
+  try {
+    $p = Get-DS
+    if (-not $p) { return 'not running' }
+    $p | Stop-Process -Force
+    # wait for the process to actually die: a 1 s sleep can be too short, and
+    # Start-DS would then see the dying process and report "already running"
+    foreach ($i in 1..20) { if (-not (Get-DS)) { break }; Start-Sleep -Milliseconds 500 }
+    'paused - progress kept'
+  } finally { if ($ctl) { $ctl.ReleaseMutex() } }
 }
 
 function Invoke-Verify {
@@ -418,10 +376,10 @@ function Invoke-Verify {
 }
 
 function Get-HaveIds {
-  # on disk = COMPLETED in the DS profile (same rule as Get-Status: assembled AND
-  # size matches - the DS writes the 3 marker files before the data paks, so a
-  # killed download would otherwise be treated as done and never re-fetched),
-  # or present in the client addons folder
+  # on disk = COMPLETED in the DS profile, or present in the client addons folder,
+  # by the one exact rule. Cached 3 s: this runs on every /servers and /browse
+  # request and parses ~900 mod metadata files, which made /servers take ~1 s.
+  if (((Get-Date) - $script:haveAt).TotalSeconds -lt 3) { return $script:haveCache }
   $have = @{}
   foreach ($e in (Get-DirMap).GetEnumerator()) {
     if (Test-AddonComplete $e.Value.path $e.Value.mtime) { $have[$e.Key] = $true }
@@ -435,6 +393,7 @@ function Get-HaveIds {
       if (Test-AddonComplete $d.FullName $d.LastWriteTime) { $have[$m.Groups[1].Value] = $true }
     }
   }
+  $script:haveCache = $have; $script:haveAt = Get-Date
   $have
 }
 
@@ -462,10 +421,15 @@ function Invoke-QueueServer([string]$Id) {
 }
 
 function Invoke-ResumeBatch {
-  # the full batch is deterministic: every sizeMap mod not yet on disk
+  # every mod the tracked servers run that is not on disk. It used to walk only
+  # $sizeMap, so a mod whose size never resolved was never queued by this button
+  # while "Queue all missing" did queue it (that one unions servers + sizes).
   $have = Get-HaveIds
-  $mods = @($sizeMap.Keys | Where-Object { -not $have.ContainsKey($_) } |
-    ForEach-Object { [PSCustomObject]@{ modId = $_; name = [string]$sizeMap[$_].name } })
+  $want = [ordered]@{}
+  foreach ($sv in $serverList) { foreach ($m in $sv.mods) { $want[$m.id] = $m.name } }
+  foreach ($id in $sizeMap.Keys) { if (-not $want.Contains($id)) { $want[$id] = [string]$sizeMap[$id].name } }
+  $mods = @($want.Keys | Where-Object { -not $have.ContainsKey($_) } |
+    ForEach-Object { [PSCustomObject]@{ modId = $_; name = [string]$want[$_] } })
   $j = Get-Cfg
   $j.game.mods = $mods
   Save-Json $j $Cfg
@@ -567,6 +531,10 @@ function Invoke-AddMod([string]$Id) {
       $queue2 += @{ id = $did; depth = $cur.depth + 1 }
     }
   }
+  # the engine rewrites the config on exit, so an append made while it runs is
+  # discarded: stop it first and start it again afterwards, like Add server
+  $wasRunning = [bool](Get-DS)
+  if ($wasRunning) { Stop-DS | Out-Null }
   $j.game.mods = @($j.game.mods) + @($add | ForEach-Object { [PSCustomObject]@{ modId = $_.modId; name = $_.name } })
   Save-Json $j $Cfg
   # merge the sizes (merge-only: a replace would destroy the rest of the map)
@@ -582,7 +550,8 @@ function Invoke-AddMod([string]$Id) {
   Save-Json $sz $Sizes 4
   $msg = "queued '$($m.name)' ($([Math]::Round([double]$m.size / 1GB, 2)) GB)"
   if ($depNames.Count) { $msg += " + $($depNames.Count) dependency mod(s): $($depNames -join ', ')" }
-  "$msg - press Start"
+  if ($wasRunning) { $msg += " ($(Start-DS))" } else { $msg += ' - press Start' }
+  $msg
 }
 
 function Get-Browse([string]$q) {
@@ -681,7 +650,8 @@ function Invoke-RefreshServers {
       })
       $ok++
     } catch { $fail++ }
-    Start-Sleep -Milliseconds 300   # stay under the free tier (60/min)
+    # pacing for the free tier (60 requests/minute); a short list needs no pause
+    if (@($serverList).Count -gt 20) { Start-Sleep -Milliseconds 300 }
   }
   if ($needSize.Count) {
     $ids = @($needSize.Keys)
@@ -1014,7 +984,7 @@ async function tick(){
   s.recent.forEach(r=>{D[r.id]=1;B[r.id]=r.b});
   s.active.forEach(a=>{A[a.id]=1});
   (s.cl||[]).forEach(id=>{D[id]=1});   // installed client-side before the batch counts as on disk
-  LAST={recent:s.recent||[],active:s.active||[],queue:s.queue||[],D:D,A:A,B:B};
+  LAST={recent:s.recent||[],active:s.active||[],queue:s.queue||[],D:D,A:A,B:B,running:!!s.running};
   renderActive(s.active||[],A);
   const key=s.recent.length+'|'+(s.cl||[]).length+'|'+(s.queue||[]).length+'|'+s.active.map(a=>a.id).join(',');
   if(key!==lastKey){          // lists only re-render when something actually finished/started
@@ -1074,7 +1044,13 @@ async function act(w){
  if(b){b.disabled=false;b.textContent=w==='start'?'Start / Resume':w==='pause'?'Pause':w==='clear-queue'?'Clear queue':w==='resume-all'?'Queue all missing':'Verify mods';}
 }
 loadSrv();   // self-gated (5 s); tick retries it too, so this is the only call site
-(async function loop(){ await tick(); setTimeout(loop,200); })();   // one request in flight, ~0.4 s cadence
+(async function loop(){
+ // one request in flight. Poll fast while downloading, slow when idle, and very
+ // slow in a background tab: each poll rebuilds ~900 rows on the only thread.
+ await tick();
+ const ms = document.hidden ? 4000 : (LAST && LAST.running ? 400 : 1500);
+ setTimeout(loop, ms);
+})();
 </script></body></html>
 '@
 
@@ -1216,5 +1192,4 @@ while ($l.IsListening) {
   }
   finally { $ctx.Response.OutputStream.Close() }
 }
-
 

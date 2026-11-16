@@ -3,6 +3,10 @@ $ErrorActionPreference = 'Stop'
 $Data = if ($env:RFMM_DATA) { $env:RFMM_DATA } else { Join-Path $PSScriptRoot 'data' }
 $h = @{ 'User-Agent' = 'arma-reforger-ai-toolkit/1.0' }
 $p = "$Data\batch1-sizes.json"
+# the dashboard writes this file too, and last writer wins: refuse while it runs
+if (Get-NetTCPConnection -LocalPort 8123 -State Listen -ErrorAction SilentlyContinue) {
+  throw 'the mod manager dashboard is running and owns the sizes file - close it, or use its Refresh all button'
+}
 $j = Get-Content $p -Raw | ConvertFrom-Json
 # a 0-byte file parses to $null; piping that produced one bogus "need" entry and
 # then wrote "mods": null, which every other script reads as "no sizes at all"

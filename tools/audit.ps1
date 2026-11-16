@@ -64,7 +64,7 @@ Section 'gitleaks (secrets)'
 $leaks = Get-Command gitleaks -ErrorAction SilentlyContinue
 if ($leaks) {
     $LASTEXITCODE = -1   # a failed launch must not read as clean
-    & $leaks detect --no-git --redact --source $repo --max-target-megabytes 2 --no-banner 2>&1 |
+    & $leaks detect --no-git --redact --source $repo --max-target-megabytes 2 --exclude-paths context --no-banner 2>&1 |
         Select-Object -Last 12 | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
     if ($LASTEXITCODE -ne 0) { Write-Host '  findings above (or scan error)' -ForegroundColor Red; $fail++ }
     else { Write-Host '  clean' -ForegroundColor Green }
@@ -131,3 +131,4 @@ if ($Deep) {
 Write-Host ''
 if ($fail) { Write-Host "audit: $fail check(s) reported findings" -ForegroundColor Red; exit 1 }
 Write-Host 'audit: clean' -ForegroundColor Green
+

@@ -4,37 +4,12 @@
 $ErrorActionPreference = 'Stop'
 $Root = if ($env:RFMM_HOME) { $env:RFMM_HOME } else { $PSScriptRoot }
 $Data = if ($env:RFMM_DATA) { $env:RFMM_DATA } else { Join-Path $PSScriptRoot 'data' }
+. "$PSScriptRoot\state.ps1"
 $cfgPath = "$Data\batch1-serverconfig.json"
 $addons  = "$Root\serverprofile\addons"
 
-function Save-Json($obj, [string]$Path) {
-  # atomic: Set-Content truncates in place and this runs on every DS restart, so
-  # a kill mid-write used to leave a config the dashboard could not parse
-  $tmp = "$Path.tmp"
-  $obj | ConvertTo-Json -Depth 5 | Set-Content $tmp -Encoding UTF8
-  if (Test-Path $Path) { [IO.File]::Replace($tmp, $Path, [NullString]::Value) } else { Move-Item $tmp $Path -Force }
-}
 
 $done = @{}
-function Test-AddonComplete([string]$Path) {
-  # the addon's own meta lists every file with its exact size: the one completion
-  # rule (README) shared with the dashboard, the client copy and test-rules.
-  # A stale Workshop size must not decide - it kept finished mods queued forever.
-  $metaPath = Join-Path $Path 'meta'
-  if (-not (Test-Path $metaPath)) { return $false }
-  try {
-    $j = Get-Content $metaPath -Raw -ErrorAction Stop | ConvertFrom-Json
-    $files = @(@($j.meta.versions)[0].package.files)
-    if (-not $files.Count) { return $false }
-    foreach ($f in $files) {
-      if (-not $f.name) { continue }
-      $p = Join-Path $Path $f.name
-      if (-not (Test-Path $p)) { return $false }
-      if ((Get-Item $p).Length -ne [long]$f.size) { return $false }
-    }
-    return $true
-  } catch { return $false }
-}
 # same completion rule as Get-HaveIds in the dashboard: a folder with the 3 marker
 # files but unfinished paks is NOT done (the DS writes the markers first), and a
 # mod whose Workshop size went stale still counts when its meta list matches.

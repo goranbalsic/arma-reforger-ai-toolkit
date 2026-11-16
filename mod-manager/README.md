@@ -55,14 +55,11 @@ account, no publishing.
 | `watchdog.ps1` | keeps the downloader alive: restarts it when it exits, kills it after a 3 minute stall, skips a mod the Workshop keeps refusing, honours Pause |
 | `make-preset.ps1` | builds a launcher preset (`-ServerId <guid>`) |
 | `trim-config.ps1` | removes already-downloaded mods from the DS config (automatic on every start) |
-| `add-server.ps1` | command-line variant of Add server (`-Id <guid>` or `-Search <text>`) |
-| `get-sizes.ps1` | resolves exact Workshop sizes for the queued mods (merge-only) |
 | `fix-sizes.ps1` | fills any size the planner could not resolve |
 | `test-rules.ps1` | asserts the completion rule against disk, and checks the served page |
 | `data\` | state: tracked servers, downloader config, exact sizes (created on first run) |
 | `serverprofile\` | where the dedicated server writes the downloads (created at runtime) |
 | `armar-server\` | the dedicated server install you provide |
-| `docs\reforgermods-api-v2.md` | offline copy of the reforgermods.net API reference |
 
 ## Where things are stored
 
@@ -89,7 +86,7 @@ exactly: every file that `meta` names exists and has the size it records there
 (the game itself reads `meta` this way). The folder must also be quiet for 2
 minutes, so a download in flight is never mistaken for a finished one.
 
-The dashboard, the queue trimming, the client copy, `add-server`, `verify`,
+The dashboard, the queue trimming, the client copy, `verify`,
 `make-preset` (it needs a resolvable `meta`) and `test-rules.ps1` all use this one
 rule. A folder's total size is never used: it lies for small mods (a 2 MB
 tolerance made a 921 KB mod "installed" at 202 KB), it lies when the Workshop size
@@ -136,4 +133,3 @@ node is installed.
 ## API
 
 `reforgermods.net` free tier: 60 requests/minute, no key needed.
-Full reference: `docs\reforgermods-api-v2.md`.

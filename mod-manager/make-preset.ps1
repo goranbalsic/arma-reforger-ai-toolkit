@@ -27,7 +27,11 @@ $conf = if ($ConfPath) { $ConfPath } else {
 $srvs = Get-Content "$Data\batch1-servers.json" -Raw | ConvertFrom-Json
 $clAddons = "$env:USERPROFILE\Documents\My Games\ArmaReforger\addons"
 
-if (-not $ConfPath -and (Get-Process ArmaReforgerSteam -ErrorAction SilentlyContinue)) { throw 'Game is running - close it first (it rewrites this file on exit)' }
+# any running client build (Steam, MS Store, DX12 variants), never the dedicated
+# server: the game rewrites this file on exit and the preset would vanish
+$gameProc = Get-Process -Name 'ArmaReforger*' -ErrorAction SilentlyContinue |
+  Where-Object { $_.ProcessName -ne 'ArmaReforgerServer' }
+if (-not $ConfPath -and $gameProc) { throw "Game is running ($($gameProc[0].ProcessName)) - close it first (it rewrites this file on exit)" }
 
 $text = [IO.File]::ReadAllText($conf)
 

@@ -7,6 +7,7 @@
 $ErrorActionPreference = 'Stop'
 $Root = if ($env:RFMM_HOME) { $env:RFMM_HOME } else { $PSScriptRoot }
 $Data = if ($env:RFMM_DATA) { $env:RFMM_DATA } else { Join-Path $PSScriptRoot 'data' }
+. "$PSScriptRoot\state.ps1"
 $s = try { Invoke-RestMethod 'http://localhost:8123/status' -TimeoutSec 60 }
      catch { "FAIL dashboard not reachable at http://localhost:8123/ ($($_.Exception.Message))"; exit 1 }
 $ds = "$Root\serverprofile\addons"
@@ -16,23 +17,6 @@ if (-not (Test-Path $ds)) {
   exit 1
 }
 $fail = 0
-function Test-AddonComplete([string]$Path) {
-  # the rule under test: the addon's own meta lists every file with its exact size
-  $metaPath = Join-Path $Path 'meta'
-  if (-not (Test-Path $metaPath)) { return $false }
-  try {
-    $j = Get-Content $metaPath -Raw -ErrorAction Stop | ConvertFrom-Json
-    $files = @(@($j.meta.versions)[0].package.files)
-    if (-not $files.Count) { return $false }
-    foreach ($f in $files) {
-      if (-not $f.name) { continue }
-      $p = Join-Path $Path $f.name
-      if (-not (Test-Path $p)) { return $false }
-      if ((Get-Item $p).Length -ne [long]$f.size) { return $false }
-    }
-    return $true
-  } catch { return $false }
-}
 foreach ($r in $s.recent) {
   $dir = Get-ChildItem $ds -Directory -Filter "*_$($r.id)" -ErrorAction SilentlyContinue | Select-Object -First 1
   if (-not $dir) { "FAIL no folder: $($r.name)"; $fail++; continue }
