@@ -11,13 +11,17 @@ tests catch behaviour, CI enforces both. Keep the agent as a fast first pass.
 
 | Tool | Repo | What it catches | Run |
 | --- | --- | --- | --- |
-| PSScriptAnalyzer | [PowerShell/PSScriptAnalyzer](https://github.com/PowerShell/PSScriptAnalyzer) | PowerShell errors (unapproved verbs, null members, overwritten automatic vars like `$args`) | `Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error,Warning` |
+| PSScriptAnalyzer | [PowerShell/PSScriptAnalyzer](https://github.com/PowerShell/PSScriptAnalyzer) | PowerShell errors (unapproved verbs, null members, overwritten automatic vars like `$args`) | `Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error` |
 | ruff | [astral-sh/ruff](https://github.com/astral-sh/ruff) | Python syntax errors, undefined names, dead imports | `ruff check --select E9,F .` |
 | python | stdlib | compile errors | `python -m py_compile <file>` |
 | node | nodejs.org | the dashboard page's JavaScript (a syntax slip there kills the whole UI) | `node --check page.js` |
 | gitleaks | [gitleaks/gitleaks](https://github.com/gitleaks/gitleaks) | committed keys, tokens, DPAPI blobs pasted into code | `gitleaks detect --no-git --redact` |
 
-`tools/audit.ps1` in this repo runs all of these and exits non-zero on findings.
+`tools/audit.ps1` in this repo runs PSScriptAnalyzer, ruff, gitleaks and the
+page's `node --check` (the last two offline, so a broken page is caught without
+the dashboard running), and exits non-zero on findings. Warning-severity
+PSScriptAnalyzer rules (verb naming, `Write-Host`) are style here and are not a
+gate - `PSAvoidAssignmentToAutomaticVariable` is the one to watch by hand.
 
 ## Tier 1 - before a commit / on demand (~1 min)
 
