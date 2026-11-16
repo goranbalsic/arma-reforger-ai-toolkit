@@ -55,13 +55,23 @@ if (-not $mutex.WaitOne(0)) { exit 0 }
 
 $fail = @{}
 $saidEmpty = $false   # "queue empty" is logged once per transition, not every 15 s
+$saidBlind = $false   # same for "cannot read the process list"
 while ($true) {
   Start-Sleep 15
   if (-not (Test-Path $Cfg)) { continue }
   if (Test-Path $PauseFlag) { continue }          # user pressed Pause
   $queued = Get-Queued
   $ds = Get-OwnEngine $Cfg
-  if ($null -eq $ds) { Write-Wd 'cannot query processes right now - skipping this tick'; continue }
+  # log the transition, not every tick: a busy machine made this fire 25 times in a
+  # row (25 lines that hid the rest of the log) while nothing was being done
+  if ($null -eq $ds) {
+    if (-not $saidBlind) {
+      Write-Wd 'cannot read the process list right now - waiting for it to recover'
+      $saidBlind = $true
+    }
+    continue
+  }
+  if ($saidBlind) { Write-Wd 'process list readable again'; $saidBlind = $false }
 
   if (-not $ds.Count) {
     if ($queued.Count -eq 0) {

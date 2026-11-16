@@ -361,10 +361,10 @@ function Stop-DS {
   New-Item -ItemType File -Force (Join-Path $Data 'paused.flag') | Out-Null
   $ctl = Lock-Engine
   try {
-    # -Fresh both times: a cached "not running" here would report "not running"
-    # while our engine keeps downloading, and clear-queue would then write a queue
-    # the running engine overwrites on exit.
+    # Prove the engine is gone before writing the config: if the process list
+    # cannot be read we must not claim "paused" - the callers write right after.
     $p = Get-DS -Fresh
+    if ($null -eq $p) { throw 'cannot read the process list right now - nothing was changed, try again in a moment' }
     if (-not $p) { return 'not running' }
     $p | Stop-Process -Force
     # wait for the process to actually die: a 1 s sleep can be too short, and
@@ -435,10 +435,12 @@ function Invoke-QueueServer([string]$Id) {
   $ids = @($first | ForEach-Object { $_.modId })
   $rest = @($sizeMap.Keys | Where-Object { -not $have.ContainsKey($_) -and $ids -notcontains $_ } |
     ForEach-Object { [PSCustomObject]@{ modId = $_; name = [string]$sizeMap[$_].name } })
+  # stop BEFORE writing: the engine rewrites this file on exit, so a write made
+  # while it runs is immediately undone (the button looked like it did nothing)
+  Stop-DS | Out-Null
   $j = Get-Cfg
   $j.game.mods = @($first + $rest)
   Save-Json $j $Cfg
-  Stop-DS | Out-Null
   $r = Start-DS
   $already = @($srv.mods).Count - $first.Count
   "queue: $($first.Count) missing mods of '$name' download first, then the other $($rest.Count) batch mods follow ($already of $($srv.mods.Count) already installed) ($r)"
@@ -541,8 +543,12 @@ function Invoke-AddMod([string]$Id) {
   # the engine rewrites the config on exit, so an append made while it runs is
   # discarded: stop it first and start it again afterwards, like Add server.
   # -Fresh: a cached "nothing running" would skip that stop and lose the append.
-  $wasRunning = [bool](Get-DS -Fresh)
+  # "cannot ask" must abort before the write, not be read as "not running".
+  $engine = Get-DS -Fresh
+  if ($null -eq $engine) { throw 'cannot read the process list right now - nothing was added, try again in a moment' }
+  $wasRunning = @($engine).Count -gt 0
   if ($wasRunning) { Stop-DS | Out-Null }
+  $j = Get-Cfg   # after the stop: the engine's own copy is now on disk
   $j.game.mods = @($j.game.mods) + @($add | ForEach-Object { [PSCustomObject]@{ modId = $_.modId; name = $_.name } })
   Save-Json $j $Cfg
   # merge the sizes (merge-only: a replace would destroy the rest of the map)
@@ -692,8 +698,11 @@ function Invoke-RefreshServers {
     # the DS rewrites the config on exit, so an append made while it runs is
     # discarded: stop it first, like every other handler that writes the queue.
     # -Fresh: the cache can say "nothing running" for 2 s after a watchdog start.
-    $restart = [bool](Get-DS -Fresh)
+    $engine = Get-DS -Fresh
+    if ($null -eq $engine) { throw 'cannot read the process list right now - the new mods were not queued, run Refresh again in a moment' }
+    $restart = @($engine).Count -gt 0
     if ($restart) { Stop-DS | Out-Null }
+    $j = Get-Cfg   # after the stop: the engine's own copy is now on disk
     $j.game.mods = @($j.game.mods) + @($new | ForEach-Object { [PSCustomObject]@{ modId = $_; name = [string]$want[$_] } })
     Save-Json $j $Cfg
     if ($restart) { $r = Start-DS; "downloader restarted for the new mods ($r)" }
@@ -721,12 +730,13 @@ function Invoke-ResumeAll {
   $want = [ordered]@{}
   foreach ($sv in $serverList) { foreach ($m in $sv.mods) { $want[$m.id] = $m.name } }
   foreach ($id in $sizeMap.Keys) { if (-not $want.Contains($id)) { $want[$id] = [string]$sizeMap[$id].name } }
-  $j = Get-Cfg
   $mods = @($want.Keys | Where-Object { -not $have.ContainsKey($_) } |
     ForEach-Object { [PSCustomObject]@{ modId = $_; name = [string]$want[$_] } })
+  # stop BEFORE writing: the engine rewrites the config on exit
+  Stop-DS | Out-Null
+  $j = Get-Cfg
   $j.game.mods = $mods
   Save-Json $j $Cfg
-  Stop-DS | Out-Null
   $r = Start-DS
   "resume all: $($mods.Count) mods queued, $(@($want.Keys).Count - $mods.Count) already installed ($r)"
 }
@@ -1184,6 +1194,17 @@ while ($l.IsListening) {
       }
     }
     if ($null -ne $msg) {
+      # Durable trail of every state-changing action, whoever triggered it: the
+      # console scrolls away, and the user's own clicks arrive in this same
+      # process. "api" is a script, "browser" is a person at the page.
+      try {
+        $src = if ($ctx.Request.UserAgent -match 'PowerShell') { 'api' } else { 'browser' }
+        # never write the request token: it is the CSRF guard for these routes
+        $what = $ctx.Request.Url.AbsolutePath
+        if ($ctx.Request.QueryString['id']) { $what += '?id=' + $ctx.Request.QueryString['id'] }
+        Add-Content (Join-Path $Data 'actions.log') ("[{0:yyyy-MM-dd HH:mm:ss}] {1,7} {2} <- {3}: {4}" -f
+          (Get-Date), $src, $what, $ctx.Request.RemoteEndPoint, ($msg -replace '\s+', ' '))
+      } catch { }
       $b = [Text.Encoding]::UTF8.GetBytes((@{ ok = $true; msg = [string]$msg } | ConvertTo-Json -Compress))
       $ctx.Response.ContentType = 'application/json'
       $ctx.Response.OutputStream.Write($b, 0, $b.Length)

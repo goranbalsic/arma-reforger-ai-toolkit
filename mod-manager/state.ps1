@@ -12,12 +12,21 @@ function Get-OwnEngine([string]$ConfigPath) {
   # never read as "not running" or a second engine starts on the same profile.
   # No path means no rule: matching on '' would claim every engine on the box.
   if (-not $ConfigPath) { return $null }
-  try {
-    $found = @(Get-CimInstance Win32_Process -Filter "Name='ArmaReforgerServer.exe'" -ErrorAction Stop |
-      Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($ConfigPath, [StringComparison]::OrdinalIgnoreCase) -ge 0 } |
-      ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue })
-    return ,$found   # the comma keeps an empty result an array, not $null
-  } catch { return $null }
+  # WMI does fail on a busy machine: it errored for 2.5 minutes straight while the
+  # audit ran, and a blind watchdog cannot restart a dead engine. One retry makes a
+  # single hiccup invisible; a real outage still reports "unknown" and is skipped.
+  for ($attempt = 1; $attempt -le 2; $attempt++) {
+    try {
+      $found = @(Get-CimInstance Win32_Process -Filter "Name='ArmaReforgerServer.exe'" `
+        -OperationTimeoutSec 5 -ErrorAction Stop |
+        Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($ConfigPath, [StringComparison]::OrdinalIgnoreCase) -ge 0 } |
+        ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue })
+      return ,$found   # the comma keeps an empty result an array, not $null
+    } catch {
+      if ($attempt -eq 2) { return $null }
+      Start-Sleep -Milliseconds 500
+    }
+  }
 }
 
 function Lock-Engine {

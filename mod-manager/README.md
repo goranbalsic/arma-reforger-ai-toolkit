@@ -58,6 +58,7 @@ account, no publishing.
 | `fix-sizes.ps1` | fills any size the planner could not resolve |
 | `test-rules.ps1` | asserts the completion rule against disk, and checks the served page |
 | `data\` | state: tracked servers, downloader config, exact sizes (created on first run) |
+| `data\actions.log` | one line per button press or script call, marked `browser` or `api`, so you can tell what changed the queue and who changed it |
 | `serverprofile\` | where the dedicated server writes the downloads (created at runtime) |
 | `armar-server\` | the dedicated server install you provide |
 
