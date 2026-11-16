@@ -347,6 +347,11 @@ function Start-DS {
   # the 1 MB download-list trap: trimming is lossless (DS skips done mods anyway),
   # skipping it makes the DS insta-crash ~30 s after a false "started"
   & "$PSScriptRoot\trim-config.ps1" | Out-Null
+  # nothing left after the trim: starting the DS here leaves a game server running
+  # a world forever, doing no work ("Queue all missing" with nothing missing did
+  # exactly that, and the watchdog then never touches it because the queue is empty)
+  $left = @((Get-Cfg).game.mods).Count
+  if ($left -eq 0) { return 'nothing to download - the queue is empty' }
   $dsArgs = "-config `"$Cfg`" -profile `"$DsProfile`""
   foreach ($try in 1, 2) {
     Start-Process -FilePath $Exe -ArgumentList $dsArgs `
@@ -507,6 +512,9 @@ function Get-Browse([string]$q) {
 
 function Get-Detail([string]$Id) {
   # one server with its full modlist (the API sends exact Workshop sizes), cached 30 s
+  # the id is pasted into an API url: only a server guid may get there, so a request
+  # from the page cannot steer it at another endpoint
+  if ($Id -notmatch '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$') { throw 'bad server id' }
   if ($script:dCache[$Id] -and ((Get-Date) - $script:dCacheAt[$Id]).TotalSeconds -lt 30) { return $script:dCache[$Id] }
   $d = Invoke-RestMethod -Uri "$ApiBase/servers/$Id" -Headers $ApiH -TimeoutSec 30
   if (-not $d.server -or -not @($d.server.mods).Count) { throw 'server has no modlist (offline or password protected)' }
