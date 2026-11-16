@@ -28,10 +28,13 @@ function Get-Queued {
   try {
     $m = (Get-Content $Cfg -Raw | ConvertFrom-Json).game.mods
     # the DS writes "mods": null on shutdown and @($null).Count is 1, so the
-    # watchdog believed one mod was queued forever and restarted the DS in a loop
-    if ($null -eq $m) { return @() }
-    return @($m)
-  } catch { return @() }
+    # watchdog believed one mod was queued forever and restarted the DS in a loop.
+    if ($null -eq $m) { return ,@() }
+    # the comma matters: returning a 1-element array unrolls it into a plain
+    # object, and a plain object's .Count is $null in Windows PowerShell 5.1 -
+    # which silently disabled the stall killer for a single-mod queue
+    return ,@($m)
+  } catch { return ,@() }
 }
 function Get-LatestLog {
   Get-ChildItem "$DsProfile\logs" -Recurse -Filter console.log -ErrorAction SilentlyContinue |
