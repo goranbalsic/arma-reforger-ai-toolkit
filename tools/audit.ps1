@@ -34,10 +34,13 @@ if (Get-Module PSScriptAnalyzer) {
 # --- Python: syntax + undefined names --------------------------------------
 Section 'ruff (Python syntax / undefined names)'
 $ruff = Get-Command ruff -ErrorAction SilentlyContinue
-if (-not $ruff -and (Test-Path "$env:USERPROFILE\.local\bin\ruff.exe")) { $ruff = Get-Item "$env:USERPROFILE\.local\bin\ruff.exe" }
+# a string path for the fallback: FileInfo has no .Source, and `& $null` only
+# errors into the pipeline, which used to leave the section looking clean
+if (-not $ruff -and (Test-Path "$env:USERPROFILE\.local\bin\ruff.exe")) { $ruff = "$env:USERPROFILE\.local\bin\ruff.exe" }
 if ($ruff) {
     $pyDirs = @('tools', 'skill\arma-reforger-modding\scripts') | ForEach-Object { Join-Path $repo $_ } | Where-Object { Test-Path $_ }
-    $out = & $ruff.Source check --select E9,F --quiet @pyDirs 2>&1
+    $LASTEXITCODE = -1
+    $out = & $ruff check --select E9,F --quiet @pyDirs 2>&1
     if ($LASTEXITCODE -ne 0) { $out | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }; $fail++ }
     else { Write-Host '  clean' -ForegroundColor Green }
 } else { Write-Host '  skipped (uv tool install ruff)' -ForegroundColor DarkGray }
@@ -56,10 +59,11 @@ if ($leaks) {
 if ($Deep) {
     Section 'semgrep (security patterns)'
     $sg = Get-Command semgrep -ErrorAction SilentlyContinue
-    if (-not $sg -and (Test-Path "$env:USERPROFILE\.local\bin\semgrep.exe")) { $sg = Get-Item "$env:USERPROFILE\.local\bin\semgrep.exe" }
+    if (-not $sg -and (Test-Path "$env:USERPROFILE\.local\bin\semgrep.exe")) { $sg = "$env:USERPROFILE\.local\bin\semgrep.exe" }
     if ($sg) {
         # p/powershell does NOT exist on the registry (404) - these do
-        $out = & $sg.Source --config p/ci --config p/secrets --config p/python --quiet --error --exclude .git --exclude context --exclude work $repo 2>&1
+        $LASTEXITCODE = -1
+        $out = & $sg --config p/ci --config p/secrets --config p/python --quiet --error --exclude .git --exclude context --exclude work $repo 2>&1
         $code = $LASTEXITCODE
         if ($out) { $out | Select-Object -Last 20 | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow } }
         if ($code -eq 0) { Write-Host '  clean' -ForegroundColor Green }
