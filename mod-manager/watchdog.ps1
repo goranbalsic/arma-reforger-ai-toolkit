@@ -17,6 +17,13 @@ $PauseFlag = "$Data\paused.flag"
 $SkipFile = "$Data\skipped.json"
 
 function Write-Wd([string]$t) { try { "[$(Get-Date -f HH:mm:ss)] $t" | Add-Content $LogFile } catch { } }
+function Save-Json($obj, [string]$Path) {
+  # atomic: this runs while the dashboard may be reading the same files, and a
+  # kill mid-write would leave a config/queue the dashboard cannot parse
+  $tmp = "$Path.tmp"
+  $obj | ConvertTo-Json -Depth 5 | Set-Content $tmp -Encoding UTF8
+  if (Test-Path $Path) { [IO.File]::Replace($tmp, $Path, [NullString]::Value) } else { Move-Item $tmp $Path -Force }
+}
 function Get-Queued {
   try { return @((Get-Content $Cfg -Raw | ConvertFrom-Json).game.mods) } catch { return @() }
 }
@@ -53,12 +60,12 @@ while ($true) {
           $j = Get-Content $Cfg -Raw | ConvertFrom-Json
           $gone = @($j.game.mods | Where-Object { $drop -contains $_.modId } | ForEach-Object { $_.name })
           $j.game.mods = @($j.game.mods | Where-Object { $drop -notcontains $_.modId })
-          $j | ConvertTo-Json -Depth 5 | Set-Content $Cfg -Encoding UTF8
+          Save-Json $j $Cfg
           $queued = @($j.game.mods)
           Write-Wd "skipped after 3 Workshop errors: $($gone -join ', ')"
           try {
             $prev = if (Test-Path $SkipFile) { @(Get-Content $SkipFile -Raw | ConvertFrom-Json) } else { @() }
-            @($prev + $gone | Select-Object -Unique) | ConvertTo-Json | Set-Content $SkipFile -Encoding UTF8
+            Save-Json @($prev + $gone | Select-Object -Unique) $SkipFile
           } catch { }
         }
       }

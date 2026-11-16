@@ -24,19 +24,40 @@ if (-not (Test-Path $Sizes))       { '{"totalBytes":0,"mods":{}}' | Set-Content 
 if (-not (Test-Path $Cfg))         { '{"game":{"mods":[]}}'     | Set-Content $Cfg -Encoding UTF8 }
 if (-not (Test-Path $ServersPath)) { '{"servers":[]}'           | Set-Content $ServersPath -Encoding UTF8 }
 
-$j = Get-Content $Sizes -Raw | ConvertFrom-Json
+function Save-Json($obj, [string]$Path, [int]$Depth = 5) {
+  # atomic: Set-Content truncates in place, so a kill mid-write (closing the
+  # console window kills this process) left broken JSON and the next start died
+  # on it. Replace is atomic on the same volume; the DS holds no handle on these.
+  $tmp = "$Path.tmp"
+  $obj | ConvertTo-Json -Depth $Depth | Set-Content $tmp -Encoding UTF8
+  if (Test-Path $Path) { [IO.File]::Replace($tmp, $Path, [NullString]::Value) } else { Move-Item $tmp $Path -Force }
+}
+function Read-Json([string]$Path, $Default) {
+  # an unreadable state file must never brick the start: a parse failure means
+  # the file is gone, so quarantine it (never delete) and carry on with defaults.
+  # An IO error is not a parse error - retry later and leave the file alone.
+  if (-not (Test-Path $Path)) { return $Default }
+  try { $raw = Get-Content $Path -Raw -ErrorAction Stop } catch { return $Default }
+  try { return ($raw | ConvertFrom-Json) }
+  catch {
+    $bad = "$Path.corrupt-$(Get-Date -f yyyyMMdd-HHmmss)"
+    Move-Item $Path $bad -Force -ErrorAction SilentlyContinue
+    Write-Host "WARNING: $([IO.Path]::GetFileName($Path)) was unreadable - moved to $(Split-Path $bad -Leaf), using defaults" -ForegroundColor Red
+    return $Default
+  }
+}
+function Get-Cfg { Read-Json $Cfg ('{"game":{"mods":[]}}' | ConvertFrom-Json) }
+
+$j = Read-Json $Sizes ('{"totalBytes":0,"mods":{}}' | ConvertFrom-Json)
 $sizeMap = @{}
 foreach ($p in $j.mods.PSObject.Properties) { $sizeMap[$p.Name] = $p.Value }
 $TotalBytes = $j.totalBytes
 
-$serverList = @()
-if (Test-Path $ServersPath) {
-  $serverList = @((Get-Content $ServersPath -Raw | ConvertFrom-Json).servers)
-  foreach ($sv in $serverList) { foreach ($m in $sv.mods) {
-    $sm = $sizeMap[$m.id]
-    $m | Add-Member -NotePropertyName e -NotePropertyValue ([double]($(if ($sm) { $sm.bytes } else { 0 }))) -Force
-  } }
-}
+$serverList = @((Read-Json $ServersPath ('{"servers":[]}' | ConvertFrom-Json)).servers)
+foreach ($sv in $serverList) { foreach ($m in $sv.mods) {
+  $sm = $sizeMap[$m.id]
+  $m | Add-Member -NotePropertyName e -NotePropertyValue ([double]($(if ($sm) { $sm.bytes } else { 0 }))) -Force
+} }
 
 $verify = $null   # last verify result shown on the page
 $script:maxDone = [double]0; $script:maxDoneTotal = [double]0   # high-water progress: the DS deletes temp files, so raw bytes dip
@@ -281,7 +302,7 @@ function Get-Status {
   }
 
   $queueList = @()
-  try { $queueList = @((Get-Content $Cfg -Raw | ConvertFrom-Json).game.mods |
+  try { $queueList = @((Get-Cfg).game.mods |
         ForEach-Object { @{ id = $_.modId; name = $_.name } }) } catch { }
 
   @{ running = $runningNow; speedB = $sp.b; speedAge = $sp.age
@@ -305,12 +326,12 @@ function Start-DS {
   if (Get-DS) { return 'already running' }
   # resume interrupted work: a partial download is not in the queue after Clear
   # queue, but Start / Resume should continue it instead of saying "empty"
-  $j0 = Get-Content $Cfg -Raw | ConvertFrom-Json
+  $j0 = Get-Cfg
   if (@($j0.game.mods).Count -eq 0) {
     $partial = @(Get-PartialMods)
     if ($partial.Count) {
       $j0.game.mods = $partial
-      $j0 | ConvertTo-Json -Depth 5 | Set-Content $Cfg -Encoding UTF8
+      Save-Json $j0 $Cfg
       Write-Host "resuming $($partial.Count) unfinished download(s)" -ForegroundColor Cyan
     }
   }
@@ -350,7 +371,7 @@ function Invoke-Verify {
   $clSet = @{}
   foreach ($i in (Get-ClientIds)) { $clSet[$i] = $true }
   $queued = @{}
-  try { foreach ($m in (Get-Content $Cfg -Raw | ConvertFrom-Json).game.mods) { $queued[$m.modId] = $true } } catch { }
+  try { foreach ($m in (Get-Cfg).game.mods) { $queued[$m.modId] = $true } } catch { }
   $ok = 0; $partial = 0; $pending = 0; $suspects = @()
   foreach ($id in $sizeMap.Keys) {
     $sm = $sizeMap[$id]; $exp = [double]$sm.bytes
@@ -401,9 +422,9 @@ function Invoke-QueueServer([string]$Id) {
   $ids = @($first | ForEach-Object { $_.modId })
   $rest = @($sizeMap.Keys | Where-Object { -not $have.ContainsKey($_) -and $ids -notcontains $_ } |
     ForEach-Object { [PSCustomObject]@{ modId = $_; name = [string]$sizeMap[$_].name } })
-  $j = Get-Content $Cfg -Raw | ConvertFrom-Json
+  $j = Get-Cfg
   $j.game.mods = @($first + $rest)
-  $j | ConvertTo-Json -Depth 5 | Set-Content $Cfg -Encoding UTF8
+  Save-Json $j $Cfg
   Stop-DS | Out-Null
   $r = Start-DS
   $already = @($srv.mods).Count - $first.Count
@@ -415,9 +436,9 @@ function Invoke-ResumeBatch {
   $have = Get-HaveIds
   $mods = @($sizeMap.Keys | Where-Object { -not $have.ContainsKey($_) } |
     ForEach-Object { [PSCustomObject]@{ modId = $_; name = [string]$sizeMap[$_].name } })
-  $j = Get-Content $Cfg -Raw | ConvertFrom-Json
+  $j = Get-Cfg
   $j.game.mods = $mods
-  $j | ConvertTo-Json -Depth 5 | Set-Content $Cfg -Encoding UTF8
+  Save-Json $j $Cfg
   Stop-DS | Out-Null
   $r = Start-DS
   "full batch resumed: $($mods.Count) mods remaining ($r)"
@@ -436,12 +457,12 @@ function Get-PartialMods {
 function Invoke-StartQueue {
   # start whatever is queued. If the queue is empty but a download was interrupted,
   # resume just those. It never refills from the servers - that is "Queue all missing".
-  $j = Get-Content $Cfg -Raw | ConvertFrom-Json
+  $j = Get-Cfg
   if (@($j.game.mods).Count -eq 0) {
     $partial = @(Get-PartialMods)
     if ($partial.Count) {
       $j.game.mods = $partial
-      $j | ConvertTo-Json -Depth 5 | Set-Content $Cfg -Encoding UTF8
+      Save-Json $j $Cfg
       $r = Start-DS
       return "resuming $($partial.Count) unfinished download(s) ($r)"
     }
@@ -449,7 +470,7 @@ function Invoke-StartQueue {
   }
   & "$PSScriptRoot\trim-config.ps1" | Out-Null
   $r = Start-DS
-  $left = @((Get-Content $Cfg -Raw | ConvertFrom-Json).game.mods).Count
+  $left = @((Get-Cfg).game.mods).Count
   "started with $left queued mods ($r)"
 }
 
@@ -491,16 +512,16 @@ function Invoke-AddServer([string]$Id) {
   $name = ([string]$s.name -split '\|')[0].Trim()
   if ($name.Length -gt 60) { $name = $name.Substring(0, 60).Trim() }
   $have = Get-HaveIds
-  foreach ($m in (Get-Content $Cfg -Raw | ConvertFrom-Json).game.mods) { $have[$m.modId] = $true }
+  foreach ($m in (Get-Cfg).game.mods) { $have[$m.modId] = $true }
   $new = @($s.mods | Where-Object { -not $have.ContainsKey($_.id) })
   if (-not $new) { return "nothing to add - all $(@($s.mods).Count) mods of '$name' are on disk or queued" }
 
-  $j = Get-Content $Cfg -Raw | ConvertFrom-Json
+  $j = Get-Cfg
   $j.game.mods = @($j.game.mods) + @($new | ForEach-Object { [PSCustomObject]@{ modId = $_.id; name = $_.name } })
-  $j | ConvertTo-Json -Depth 5 | Set-Content $Cfg -Encoding UTF8
+  Save-Json $j $Cfg
 
   # merge the real sizes into the sizes file (merge-only: never replace it)
-  $sz = Get-Content $Sizes -Raw | ConvertFrom-Json
+  $sz = Read-Json $Sizes $j
   foreach ($m in $new) {
     if (-not $sizeMap.ContainsKey($m.id)) {
       $sizeMap[$m.id] = @{ name = $m.name; bytes = [double]$m.size; exact = [bool]$m.sizeKnown }
@@ -509,12 +530,12 @@ function Invoke-AddServer([string]$Id) {
   }
   $script:TotalBytes = ($sizeMap.Values | ForEach-Object { [double]$_.bytes } | Measure-Object -Sum).Sum
   $sz.totalBytes = [double]$script:TotalBytes
-  $sz | ConvertTo-Json -Depth 4 | Set-Content $Sizes -Encoding UTF8
+  Save-Json $sz $Sizes 4
 
   # show the new server in the Servers card immediately, and remember it
   $script:serverList = @($serverList) + @([PSCustomObject]@{ id = $Id; name = $s.name; mods = @($s.mods | ForEach-Object {
     [PSCustomObject]@{ id = $_.id; name = $_.name; e = [double]$_.size } }) })
-  @{ servers = $serverList } | ConvertTo-Json -Depth 6 | Set-Content $ServersPath -Encoding UTF8
+  Save-Json @{ servers = $serverList } $ServersPath 6
 
   $gb = [Math]::Round(($new | ForEach-Object { [double]$_.size } | Measure-Object -Sum).Sum / 1GB, 2)
   Stop-DS | Out-Null
@@ -530,7 +551,7 @@ function Invoke-RefreshServers {
   $script:dCache = @{}; $script:dCacheAt = @{}
   $script:dirCacheAt = (Get-Date).AddMinutes(-10)   # force a disk rescan
   $script:clCacheAt = (Get-Date).AddMinutes(-10)
-  $sz = Get-Content $Sizes -Raw | ConvertFrom-Json
+  $sz = Read-Json $Sizes $j
   foreach ($p in $sz.mods.PSObject.Properties) { $sizeMap[$p.Name] = $p.Value }
   $ok = 0; $fail = 0
   $needSize = [ordered]@{}
@@ -569,12 +590,12 @@ function Invoke-RefreshServers {
   }
   $script:TotalBytes = ($sizeMap.Values | ForEach-Object { [double]$_.bytes } | Measure-Object -Sum).Sum
   $sz.totalBytes = [double]$script:TotalBytes
-  $sz | ConvertTo-Json -Depth 4 | Set-Content $Sizes -Encoding UTF8
-  @{ servers = $serverList } | ConvertTo-Json -Depth 6 | Set-Content $ServersPath -Encoding UTF8
+  Save-Json $sz $Sizes 4
+  Save-Json @{ servers = $serverList } $ServersPath 6
 
   # queue what the servers run today and we do not have yet (append only)
   $have = Get-HaveIds
-  $j = Get-Content $Cfg -Raw | ConvertFrom-Json
+  $j = Get-Cfg
   $queued = @{}
   foreach ($m in $j.game.mods) { $queued[$m.modId] = $true }
   $want = [ordered]@{}
@@ -582,7 +603,7 @@ function Invoke-RefreshServers {
   $new = @($want.Keys | Where-Object { -not $have.ContainsKey($_) -and -not $queued.ContainsKey($_) })
   if ($new.Count) {
     $j.game.mods = @($j.game.mods) + @($new | ForEach-Object { [PSCustomObject]@{ modId = $_; name = [string]$want[$_] } })
-    $j | ConvertTo-Json -Depth 5 | Set-Content $Cfg -Encoding UTF8
+    Save-Json $j $Cfg
   }
   $onDisk = 0
   foreach ($sv in $serverList) { $onDisk += @($sv.mods | Where-Object { $have.ContainsKey($_.id) }).Count }
@@ -592,12 +613,12 @@ function Invoke-RefreshServers {
 function Invoke-ClearQueue {
   # empty the queue and stop the downloader - nothing is deleted from disk.
   # Stop FIRST: the DS writes its config back on shutdown, which would refill it.
-  $n = @((Get-Content $Cfg -Raw | ConvertFrom-Json).game.mods).Count
+  $n = @((Get-Cfg).game.mods).Count
   Stop-DS | Out-Null
   Start-Sleep 2
-  $j = Get-Content $Cfg -Raw | ConvertFrom-Json
+  $j = Get-Cfg
   $j.game.mods = @()
-  $j | ConvertTo-Json -Depth 5 | Set-Content $Cfg -Encoding UTF8
+  Save-Json $j $Cfg
   "queue cleared ($n mods removed) - installed mods are untouched"
 }
 
@@ -607,11 +628,11 @@ function Invoke-ResumeAll {
   $want = [ordered]@{}
   foreach ($sv in $serverList) { foreach ($m in $sv.mods) { $want[$m.id] = $m.name } }
   foreach ($id in $sizeMap.Keys) { if (-not $want.Contains($id)) { $want[$id] = [string]$sizeMap[$id].name } }
-  $j = Get-Content $Cfg -Raw | ConvertFrom-Json
+  $j = Get-Cfg
   $mods = @($want.Keys | Where-Object { -not $have.ContainsKey($_) } |
     ForEach-Object { [PSCustomObject]@{ modId = $_; name = [string]$want[$_] } })
   $j.game.mods = $mods
-  $j | ConvertTo-Json -Depth 5 | Set-Content $Cfg -Encoding UTF8
+  Save-Json $j $Cfg
   Stop-DS | Out-Null
   $r = Start-DS
   "resume all: $($mods.Count) mods queued, $(@($want.Keys).Count - $mods.Count) already installed ($r)"

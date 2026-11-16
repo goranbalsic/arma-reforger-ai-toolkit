@@ -7,6 +7,14 @@ $Data = if ($env:RFMM_DATA) { $env:RFMM_DATA } else { Join-Path $PSScriptRoot 'd
 $cfgPath = "$Data\batch1-serverconfig.json"
 $addons  = "$Root\serverprofile\addons"
 
+function Save-Json($obj, [string]$Path) {
+  # atomic: Set-Content truncates in place and this runs on every DS restart, so
+  # a kill mid-write used to leave a config the dashboard could not parse
+  $tmp = "$Path.tmp"
+  $obj | ConvertTo-Json -Depth 5 | Set-Content $tmp -Encoding UTF8
+  if (Test-Path $Path) { [IO.File]::Replace($tmp, $Path, [NullString]::Value) } else { Move-Item $tmp $Path -Force }
+}
+
 $done = @{}
 $sizes = @{}
 $sp = "$Data\batch1-sizes.json"
@@ -52,5 +60,5 @@ if (-not (Get-Process ArmaReforgerServer -ErrorAction SilentlyContinue)) {
 }
 
 $j.game.mods = $left
-$j | ConvertTo-Json -Depth 5 | Set-Content $cfgPath -Encoding UTF8
+Save-Json $j $cfgPath
 "saved"
