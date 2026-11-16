@@ -146,5 +146,22 @@ while ($true) {
       catch { Write-Wd "trim failed: $($_.Exception.Message)" }
       $null = Start-EngineLocked
     }
+    continue
   }
+
+  # Nothing queued but the engine is still there: the DS does not exit by itself,
+  # so it sat for 6 minutes holding 2 GB, and the next Start found a live engine
+  # that keeps reading its old empty list - the mods queued after it never
+  # downloaded. 30 s of log silence so an assembly that just emptied the list is
+  # never cut off.
+  $lg = Get-LatestLog
+  if ($lg -and $lg.LastWriteTime -gt (Get-Date).AddSeconds(-30)) { continue }
+  $ctl = Lock-Engine
+  try {
+    $now = Get-Queued   # @() around the call would wrap its ,@() and count 1
+    if ($ctl -and $now.Count -eq 0) {
+      $ds | Stop-Process -Force
+      Write-Wd 'queue empty - engine stopped'
+    }
+  } finally { if ($ctl) { $ctl.ReleaseMutex() } }
 }
