@@ -70,21 +70,20 @@ Notes:
 ## MCP wiring (OpenCode V2)
 
 Config lives in `~/.config/opencode/opencode.jsonc` (global) or
-`opencode.jsonc` in the project. V2 puts servers under `mcp.servers`:
+`opencode.jsonc` in the project. V2 puts servers under `mcp.servers`.
+**As configured globally on this machine:** `trivy` (works - 6 tools) plus the
+existing `reforger` and `rea-tools`. `semgrep-mcp` was removed: upstream
+deprecated it and it only exposes a `deprecation_notice` tool - semgrep is used
+through the CLI instead (`tools/audit.ps1 -Deep`).
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
     "servers": {
-      "semgrep": {
-        "type": "local",
-        "command": ["uvx", "semgrep-mcp"],
-        "codemode": false
-      },
       "trivy": {
         "type": "local",
-        "command": ["trivy", "mcp"],
+        "command": ["C:\\Users\\Administrator\\AppData\\Local\\Microsoft\\WinGet\\Links\\trivy.exe", "mcp"],
         "codemode": false
       },
       "playwright": {
@@ -99,12 +98,14 @@ Config lives in `~/.config/opencode/opencode.jsonc` (global) or
 Setup commands:
 
 ```powershell
-uv tool install semgrep          # provides the semgrep CLI
-uvx semgrep-mcp --help           # MCP server (ships in the semgrep project)
+uv tool install semgrep          # semgrep CLI (rules: p/ci, p/secrets, p/python)
 winget install aquasecurity.trivy
-trivy plugin install mcp         # then: trivy mcp
+trivy plugin install mcp         # then: trivy mcp  (this is what the MCP server runs)
 npx -y @playwright/mcp@latest --help
 ```
+
+`trivy mcp` exposes: `scan_filesystem`, `scan_image`, `scan_repository`,
+`findings_list`, `findings_get`, `trivy_version`.
 
 MCP servers run with your user permissions. Prefer official servers, keep them
 read-only where possible, and never paste secrets into the config - use
