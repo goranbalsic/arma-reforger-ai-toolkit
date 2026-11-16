@@ -27,9 +27,15 @@ if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
 }
 if (Get-Module PSScriptAnalyzer) {
     Import-Module PSScriptAnalyzer -ErrorAction SilentlyContinue
+    # Error severity plus every warning rule except the pure style ones: a shadowed
+    # automatic variable ($Profile, $args, $Error) or a variable/parameter that is
+    # written and never read is a defect, and this used to be the documented promise
+    # that -Severity Error alone could not keep.
+    $styleRules = 'PSAvoidUsingWriteHost', 'PSAvoidUsingEmptyCatchBlock', 'PSUseSingularNouns',
+                  'PSUseShouldProcessForStateChangingFunctions', 'PSUseBOMForUnicodeEncodedFile'
     $issues = @(Get-ChildItem $repo -Recurse -Filter *.ps1 -ErrorAction SilentlyContinue |
         Where-Object { $_.FullName -notmatch '\\\.git\\' } |
-        ForEach-Object { Invoke-ScriptAnalyzer -Path $_.FullName -Severity Error -ErrorAction SilentlyContinue })
+        ForEach-Object { Invoke-ScriptAnalyzer -Path $_.FullName -Severity Error, Warning -ExcludeRule $styleRules -ErrorAction SilentlyContinue })
     if ($issues.Count) {
         $issues | Group-Object ScriptName | ForEach-Object {
             Write-Host ("  {0}: {1}" -f $_.Name, $_.Count) -ForegroundColor Red

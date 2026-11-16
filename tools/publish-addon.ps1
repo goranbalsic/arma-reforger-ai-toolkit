@@ -121,7 +121,7 @@ $dirs = @($arma.GameAddons) + @($ExtraAddonsDir | Where-Object { $_ })
 $addonsArg = ($dirs | ForEach-Object { (Resolve-Path $_).Path }) -join ','
 
 $before = Get-LatestLog
-$args = @(
+$wbArgs = @(
     '-wbModule=ResourceManager',
     '-addonsDir', "`"$addonsArg`""
 )
@@ -129,22 +129,22 @@ $args = @(
 if ($Project) {
     $gproj = Join-Path (Resolve-Path $Project).Path 'addon.gproj'
     if (-not (Test-Path $gproj)) { throw "No addon.gproj in $Project" }
-    $args += @('-gproj', "`"$gproj`"")
+    $wbArgs += @('-gproj', "`"$gproj`"")
 }
-$args += @(
+$wbArgs += @(
     '-publishAddon',
     '-publishAddonDir', "`"$PublishDir`"",
     '-publishAddonVersion', $Version,
     '-wbSilent', '-noThrow'
 )
-if ($ChangeNote) { $args += @('-publishAddonChangeNote', "`"$ChangeNote`"") }
+if ($ChangeNote) { $wbArgs += @('-publishAddonChangeNote', "`"$ChangeNote`"") }
 if ($PreviewImage) {
     if (-not (Test-Path $PreviewImage)) { throw "No preview image at $PreviewImage" }
-    $args += @('-publishAddonPreviewImage', "`"$((Resolve-Path $PreviewImage).Path)`"")
+    $wbArgs += @('-publishAddonPreviewImage', "`"$((Resolve-Path $PreviewImage).Path)`"")
 }
 
 Write-Host "Headless publish of '$ModId' $Version" -ForegroundColor Cyan
-$p = Start-Process -FilePath $arma.Workbench -PassThru -ArgumentList $args
+$p = Start-Process -FilePath $arma.Workbench -PassThru -ArgumentList $wbArgs
 $killed = $false
 if (-not $p.WaitForExit($TimeoutSeconds * 1000)) {
     $killed = $true

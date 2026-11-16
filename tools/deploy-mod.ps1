@@ -34,7 +34,7 @@ if (-not $PresetOnly) {
 }
 
 function New-Meta {
-    param($AddonDir, $AddonId, $AddonGuid, $Name)
+    param($AddonDir, $AddonGuid, $Name)
     if (Test-Path (Join-Path $AddonDir 'meta')) { return }
     $deps = @()
     $gproj = Join-Path $AddonDir 'addon.gproj'
@@ -76,7 +76,7 @@ function New-Meta {
     Write-Host "Wrote meta so the launcher sees a local addon" -ForegroundColor DarkGray
 }
 
-if ($CreateMeta -and -not $PresetOnly) { New-Meta -AddonDir $dest -AddonId $Id -AddonGuid $Guid -Name $Title }
+if ($CreateMeta -and -not $PresetOnly) { New-Meta -AddonDir $dest -AddonGuid $Guid -Name $Title }
 if ($NoPreset -or -not $Preset) {
     Write-Host 'Addon installed; no preset requested.' -ForegroundColor DarkGray
     exit 0

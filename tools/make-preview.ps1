@@ -36,7 +36,6 @@ $g3 = [System.Drawing.Graphics]::FromImage($out)
 $g3.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
 
 # background: plain dark panel so the character reads clearly
-$bg = New-Object System.Drawing.Rectangle 0, 0, 1024, 576
 $g3.Clear([System.Drawing.Color]::FromArgb(255, 26, 26, 26))
 
 $scale = 556.0 / $ch
