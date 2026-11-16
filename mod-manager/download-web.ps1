@@ -828,11 +828,8 @@ $html = @'
  <div id="bs" class="dim" style="margin-top:8px">type a server name and press Enter</div>
 </details>
 <details class="card" open><summary><h2 style="font-size:15px;color:#fff">Download individual mods <span class="dim">live workshop</span></h2></summary>
- <div style="margin-top:8px;display:flex;gap:8px">
-  <input id="mq" placeholder="mod name, author, or 16-character mod id" onkeydown="if(event.key==='Enter')searchMods(1)">
-  <button onclick="searchMods(1)">Search</button></div>
- <div id="msaid" class="dim" style="margin-top:6px;min-height:18px;font-size:13px"></div>
- <div id="mres" class="dim" style="margin-top:4px">Type a name, an author, or a mod id and press Enter. Added mods (with their dependencies) go to the Queue above.</div>
+ <div style="margin-top:8px"><input id="mq" placeholder="search mods (name, author, or 16-character mod id)..." oninput="modsCleared()" onkeydown="if(event.key==='Enter')searchMods(1)"><button onclick="searchMods(1)">Search</button></div>
+ <div id="mres" class="dim" style="margin-top:8px">type a mod name, an author, or a mod id and press Enter</div>
  <div id="mpager" style="margin-top:6px"></div>
 </details>
 <details class="card" open><summary><h2 style="font-size:15px;color:#fff">Servers <span id="srvcount" class="dim"></span><button class="mini" onclick="refreshSrv(event)" title="re-read disk + pull fresh modlists from reforgermods.net">Refresh all</button></h2></summary><div id="srv" class="dim" style="margin-top:8px">loading server lists...</div></details>
@@ -950,16 +947,26 @@ async function loadBS(id,d){
 }
 function say(t,ok){const e=document.getElementById('say'); if(!e)return; e.textContent=t||''; e.className=t?(ok===false?'bad':ok===true?'ok':'dim'):'dim';}
 let MRES=null;
+const MHINT='type a mod name, an author, or a mod id and press Enter';
 async function searchMods(p){
  const q=document.getElementById('mq').value.trim();
- const out=document.getElementById('msaid');
- if(!q){document.getElementById('mres').innerHTML='<span class="dim">Type a name, an author, or a mod id.</span>';return;}
- out.className='dim'; out.textContent='searching...';
+ const el=document.getElementById('mres');
+ if(!q)return;                 // an empty box never wipes the list you already have
+ el.className='dim'; el.textContent='searching...';
+ document.getElementById('mpager').innerHTML='';
  try{
   const r=await (await fetch('/search-mods?q='+encodeURIComponent(q)+'&page='+(p||1))).json();
   if(r.error)throw new Error(r.error);
-  MRES=r; renderMods(); out.textContent=r.total?(r.total+' mods found'):'nothing found';
- }catch(e){out.className='bad'; out.textContent='search failed: '+e.message;}
+  MRES=r; renderMods();
+ }catch(e){ el.className='bad'; el.innerHTML='search failed: '+esc(e.message); }
+}
+function modsCleared(){
+ // same behaviour as the server browser: clearing the box clears the results
+ if(document.getElementById('mq').value.trim())return;
+ MRES=null;
+ const el=document.getElementById('mres');
+ el.className='dim'; el.textContent=MHINT;
+ document.getElementById('mpager').innerHTML='';
 }
 function renderMods(){
  const el=document.getElementById('mres'); if(!MRES)return;
@@ -971,7 +978,8 @@ function renderMods(){
    '<div class="dim" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px">'+esc(m.author||'')+' &middot; '+sz(m.size)+(m.version?' &middot; v'+esc(m.version):'')+'</div></div>'+
    '<span>'+(inst?'<span class="ok">installed</span>':'<button class="mini" onclick="addMod(\''+escAttr(m.id)+'\')">Add</button>')+'</span></div>';
  }).join('');
- document.getElementById('mpager').innerHTML = MRES.pages>1?('<button class="mini grey" '+(MRES.page<=1?'disabled':'')+' onclick="searchMods('+(MRES.page-1)+')">&larr; prev</button> <span class="dim">page '+MRES.page+' / '+MRES.pages+'</span> <button class="mini grey" '+(MRES.page>=MRES.pages?'disabled':'')+' onclick="searchMods('+(MRES.page+1)+')">next &rarr;</button>'):'';
+ document.getElementById('mpager').innerHTML = '<span class="dim">'+MRES.total+' mods</span>' +
+  (MRES.pages>1?(' <button class="mini grey" '+(MRES.page<=1?'disabled':'')+' onclick="searchMods('+(MRES.page-1)+')">&larr; prev</button> <span class="dim">page '+MRES.page+' / '+MRES.pages+'</span> <button class="mini grey" '+(MRES.page>=MRES.pages?'disabled':'')+' onclick="searchMods('+(MRES.page+1)+')">next &rarr;</button>'):'');
 }
 async function addMod(id){
  await post('add-mod?id='+encodeURIComponent(id));
