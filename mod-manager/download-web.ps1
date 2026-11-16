@@ -611,8 +611,13 @@ function Invoke-RefreshServers {
   foreach ($sv in $serverList) { foreach ($m in $sv.mods) { $want[$m.id] = $m.name } }
   $new = @($want.Keys | Where-Object { -not $have.ContainsKey($_) -and -not $queued.ContainsKey($_) })
   if ($new.Count) {
+    # the DS rewrites the config on exit, so an append made while it runs is
+    # discarded: stop it first, like every other handler that writes the queue
+    $restart = [bool](Get-DS)
+    if ($restart) { Stop-DS | Out-Null }
     $j.game.mods = @($j.game.mods) + @($new | ForEach-Object { [PSCustomObject]@{ modId = $_; name = [string]$want[$_] } })
     Save-Json $j $Cfg
+    if ($restart) { $r = Start-DS; "downloader restarted for the new mods ($r)" }
   }
   $onDisk = 0
   foreach ($sv in $serverList) { $onDisk += @($sv.mods | Where-Object { $have.ContainsKey($_.id) }).Count }

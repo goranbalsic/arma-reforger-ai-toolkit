@@ -17,8 +17,10 @@ $ErrorActionPreference = 'Stop'
 $Data = if ($env:RFMM_DATA) { $env:RFMM_DATA } else { Join-Path $PSScriptRoot 'data' }
 
 $conf = if ($ConfPath) { $ConfPath } else {
-  $f = Get-ChildItem "$env:USERPROFILE\Documents\My Games\ArmaReforger\profile\.save" -Recurse -Filter ReforgerGameSettings.conf |
-    Select-Object -First 1
+  # newest wins: several profile folders (one per Steam/user) each hold a copy,
+  # and picking an arbitrary one rewrote a stale conf
+  $f = Get-ChildItem "$env:USERPROFILE\Documents\My Games\ArmaReforger\profile\.save" -Recurse -Filter ReforgerGameSettings.conf -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending | Select-Object -First 1
   if (-not $f) { throw 'ReforgerGameSettings.conf not found' }
   $f.FullName
 }
@@ -81,7 +83,7 @@ if ($installedCount -lt @($srv.mods).Count) {
 }
 if (-not $mods) { throw 'no installed mods for this preset yet' }
 
-Copy-Item $conf "$conf.bak-$(Get-Date -f yyyyMMdd-HHmmss)"
+Copy-Item $conf "$conf.bak-$(Get-Date -f yyyyMMdd-HHmmss)" -Force
 
 function Get-Hash16([string]$s) {
   $sha = [System.Security.Cryptography.SHA256]::Create()
@@ -115,4 +117,8 @@ $newAt = $check.IndexOf('SCR_WorkshopAddonPreset "{' + $presetGuid + '}"')
 $inside = $mpAfter -ge 0 -and $newAt -gt $mpAfter
 "verification: presets=$presets (expected $($presetsBefore + 1)) inside m_aPresets=$inside meta=$($mods.Count) braces=$open/$close"
 if ($presets -ne $presetsBefore + 1 -or $open -ne $close -or -not $inside) { throw 'verification failed - restore from the .bak next to the conf' }
+# keep the newest 5 backups only: 17 had accumulated next to a single conf
+Get-ChildItem (Split-Path $conf -Parent) -Filter "$([IO.Path]::GetFileName($conf)).bak-*" -ErrorAction SilentlyContinue |
+  Sort-Object LastWriteTime -Descending | Select-Object -Skip 5 |
+  Remove-Item -Force -ErrorAction SilentlyContinue
 "OK - preset '$presetName' with $($mods.Count) installed mods"
