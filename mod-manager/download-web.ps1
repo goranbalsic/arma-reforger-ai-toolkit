@@ -73,15 +73,22 @@ function Get-SkippedNames {
   $script:skipped
 }
 
-function Get-DS {
-  # our engine only (state.ps1: Get-OwnEngine), cached 2 s because /status polls
-  # often and a WMI query per poll is not free. The name pre-check keeps the
-  # common "nothing running" case down to one cheap call.
-  if (-not (Get-Process ArmaReforgerServer -ErrorAction SilentlyContinue)) { return }
-  if ($script:dsAt -and ((Get-Date) - $script:dsAt).TotalSeconds -lt 2) { return $script:dsCache }
-  $script:dsCache = Get-OwnEngine $Cfg
+function Get-DS([switch]$Fresh) {
+  # Our engine only (state.ps1: Get-OwnEngine), cached 2 s because /status polls
+  # often. A caller that is about to write the config MUST pass -Fresh: a cached
+  # "nothing running" made add-mod / refresh-servers append while the engine was
+  # running, and the engine rewrites that file on exit, so the append vanished.
+  # Empty array = none. $null = the query failed - not the same thing.
+  if (-not (Get-Process ArmaReforgerServer -ErrorAction SilentlyContinue)) { return ,@() }
+  if (-not $Fresh -and $script:dsAt -and ((Get-Date) - $script:dsAt).TotalSeconds -lt 2) {
+    if ($null -eq $script:dsCache) { return $null }
+    return ,$script:dsCache
+  }
+  $found = Get-OwnEngine $Cfg
+  $script:dsCache = $found
   $script:dsAt = Get-Date
-  $script:dsCache
+  if ($null -eq $found) { return $null }
+  ,$found
 }
 
 function Get-Log {
@@ -316,7 +323,9 @@ function Start-DS {
   $ctl = Lock-Engine
   if (-not $ctl) { return 'another start/stop is in progress - try again' }
   try {
-    if (@(Get-DS).Count) { return 'already running' }
+    $mine = Get-DS -Fresh
+    if ($null -eq $mine) { return 'cannot read the process list right now - press Start again' }
+    if (@($mine).Count) { return 'already running' }
     # a server we did not start shares the profile folder the engine writes to:
     # refuse instead of running two of them (and never stop theirs on Pause)
     if (Get-Process ArmaReforgerServer -ErrorAction SilentlyContinue) {
@@ -352,12 +361,15 @@ function Stop-DS {
   New-Item -ItemType File -Force (Join-Path $Data 'paused.flag') | Out-Null
   $ctl = Lock-Engine
   try {
-    $p = Get-DS
+    # -Fresh both times: a cached "not running" here would report "not running"
+    # while our engine keeps downloading, and clear-queue would then write a queue
+    # the running engine overwrites on exit.
+    $p = Get-DS -Fresh
     if (-not $p) { return 'not running' }
     $p | Stop-Process -Force
     # wait for the process to actually die: a 1 s sleep can be too short, and
     # Start-DS would then see the dying process and report "already running"
-    foreach ($i in 1..20) { if (-not (Get-DS)) { break }; Start-Sleep -Milliseconds 500 }
+    foreach ($i in 1..20) { if (-not (Get-DS -Fresh)) { break }; Start-Sleep -Milliseconds 500 }
     'paused - progress kept'
   } finally { if ($ctl) { $ctl.ReleaseMutex() } }
 }
@@ -527,8 +539,9 @@ function Invoke-AddMod([string]$Id) {
     }
   }
   # the engine rewrites the config on exit, so an append made while it runs is
-  # discarded: stop it first and start it again afterwards, like Add server
-  $wasRunning = [bool](Get-DS)
+  # discarded: stop it first and start it again afterwards, like Add server.
+  # -Fresh: a cached "nothing running" would skip that stop and lose the append.
+  $wasRunning = [bool](Get-DS -Fresh)
   if ($wasRunning) { Stop-DS | Out-Null }
   $j.game.mods = @($j.game.mods) + @($add | ForEach-Object { [PSCustomObject]@{ modId = $_.modId; name = $_.name } })
   Save-Json $j $Cfg
@@ -677,8 +690,9 @@ function Invoke-RefreshServers {
   $new = @($want.Keys | Where-Object { -not $have.ContainsKey($_) -and -not $queued.ContainsKey($_) })
   if ($new.Count) {
     # the DS rewrites the config on exit, so an append made while it runs is
-    # discarded: stop it first, like every other handler that writes the queue
-    $restart = [bool](Get-DS)
+    # discarded: stop it first, like every other handler that writes the queue.
+    # -Fresh: the cache can say "nothing running" for 2 s after a watchdog start.
+    $restart = [bool](Get-DS -Fresh)
     if ($restart) { Stop-DS | Out-Null }
     $j.game.mods = @($j.game.mods) + @($new | ForEach-Object { [PSCustomObject]@{ modId = $_; name = [string]$want[$_] } })
     Save-Json $j $Cfg

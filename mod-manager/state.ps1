@@ -10,6 +10,8 @@ function Get-OwnEngine([string]$ConfigPath) {
   # Matching the process name alone killed a community server the user runs
   # themselves. Empty array = none; $null = the query itself failed, which must
   # never read as "not running" or a second engine starts on the same profile.
+  # No path means no rule: matching on '' would claim every engine on the box.
+  if (-not $ConfigPath) { return $null }
   try {
     $found = @(Get-CimInstance Win32_Process -Filter "Name='ArmaReforgerServer.exe'" -ErrorAction Stop |
       Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($ConfigPath, [StringComparison]::OrdinalIgnoreCase) -ge 0 } |

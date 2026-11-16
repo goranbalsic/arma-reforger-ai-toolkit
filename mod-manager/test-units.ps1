@@ -67,6 +67,8 @@ Check 'missing file returns the default'      ((Read-Json (Join-Path $tmp 'nope.
 Write-Host 'engine ownership (only the engine we started)'
 $none = Get-OwnEngine (Join-Path $tmp 'no-such-config.json')
 Check 'no match is an empty array, not $null' (($null -ne $none) -and (@($none).Count -eq 0))
+if ($null -eq $none) { '       (the WMI query failed on this machine, so the check above cannot run)' }
+Check 'no config path claims no engine'       ($null -eq (Get-OwnEngine ''))
 
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 ""
