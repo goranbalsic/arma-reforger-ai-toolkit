@@ -719,6 +719,9 @@ $html = @'
 <script>
 let T='__T__';   // refreshed from /status so an open page survives dashboard restarts
 function esc(x){return String(x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+// ids land inside onclick="...('id')" and data-id="...": esc() alone leaves
+// quotes alone, so an id from the API could break out of the handler
+function escAttr(x){return esc(x).replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 function sz(b){return b>=1073741824?(b/1073741824).toFixed(b>=107374182400?2:3)+' GB':b>=1048576?(b/1048576).toFixed(1)+' MB':b>=1024?(b/1024).toFixed(1)+' KB':Math.round(b)+' B'}
 function left(sec){ if(!isFinite(sec)||sec<=0) return '--'; const h=Math.floor(sec/3600), m=Math.round((sec%3600)/60); return h>0?(h+'h '+m+'m'):(m+' min'); }
 let SRV=null,BR=null,lastKey='';
@@ -757,15 +760,22 @@ function renderAll(){
   renderQueue(LAST.queue,LAST.A);
   renderRec(LAST.recent);
 }
-async function loadSrv(){try{SRV=await (await fetch('/servers')).json();lastKey='';}catch(e){}}
+let SRVAt=0;
+async function loadSrv(){
+ // /servers costs a full disk scan: retry at most every 5 s, and never accept an
+ // error body - a 500 body parses as json, which made SRV truthy and froze the
+ // servers card (renderSrv threw on SRV.servers) for the rest of the session
+ if(Date.now()-SRVAt<5000)return; SRVAt=Date.now();
+ try{const r=await fetch('/servers'),j=await r.json(); if(r.ok&&j&&j.servers){SRV=j;lastKey='';}}catch(e){}
+}
 function renderSrv(D,A,B){
  if(!SRV)return;
  document.getElementById('srvcount').textContent='('+SRV.servers.length+')';
  document.getElementById('srv').innerHTML=SRV.servers.map(v=>{
   const done=v.haveCount!=null?v.haveCount:v.mods.filter(m=>D[m.id]).length;
   return '<details><summary>'+esc(v.name)+' <span class="dim">'+done+' / '+v.mods.length+' downloaded</span>'+
-   '<button class="mini" onclick="queueSrv(\''+v.id+'\',event)">Queue first</button>'+
-   '<button class="mini amber" onclick="presetSrv(\''+v.id+'\',event)">Make preset</button></summary><ul>'+
+   '<button class="mini" onclick="queueSrv(\''+escAttr(v.id)+'\',event)">Queue first</button>'+
+   '<button class="mini amber" onclick="presetSrv(\''+escAttr(v.id)+'\',event)">Make preset</button></summary><ul>'+
    v.mods.map(m=>{
     const t=D[m.id]?'<span class="ok">&#10003;</span>':A[m.id]?'<span class="warn">&#10227;</span>':'<span class="dim">&#8226;</span>';
     const s2=B[m.id]!=null?sz(B[m.id]):(m.e>0?sz(m.e):'');
@@ -780,6 +790,8 @@ async function browse(){
  el.textContent='searching live servers...';
  try{
   const r=await (await fetch('/browse?q='+encodeURIComponent(q))).json();
+  if(r.error)throw new Error(r.error);
+  if(!r.servers)throw new Error('unexpected response');
   BR=r.servers; renderBrowse();
  }catch(e){ el.innerHTML='<span class="bad">search failed: '+esc(String(e))+'</span>'; }
 }
@@ -792,20 +804,23 @@ function renderBrowse(){
  const el=document.getElementById('bs');
  if(!BR||!BR.length){el.innerHTML='<span class="dim">no servers found</span>';return;}
  el.innerHTML=BR.map(v=>{
-  const pl=v.players+'/'+v.maxPlayers+' players';
+  const pl=(v.players==null?'?':v.players)+'/'+(v.maxPlayers==null?'?':v.maxPlayers)+' players';
   const md=v.haveCount>=0 ? v.haveCount+'/'+v.totalMods+' on disk' : v.modCount+' mods';
-  return '<details ontoggle="bsToggle(this,\''+v.id+'\')"><summary>'+esc(v.name)+
+  return '<details ontoggle="bsToggle(this,\''+escAttr(v.id)+'\')"><summary>'+esc(v.name)+
   ' <span class="dim">'+pl+(v.online?'':' &middot; offline')+' &middot; '+md+'</span>'+
-  '<button class="mini" onclick="addSrv(\''+v.id+'\',event)">Add server</button></summary>'+
-  '<div class="bs" data-id="'+v.id+'"><span class="dim">loading modlist...</span></div></details>';
+  '<button class="mini" onclick="addSrv(\''+escAttr(v.id)+'\',event)">Add server</button></summary>'+
+  '<div class="bs" data-id="'+escAttr(v.id)+'"><span class="dim">loading modlist...</span></div></details>';
  }).join('');
 }
-function bsToggle(d,id){ if(d.open&&!d.dataset.l){d.dataset.l=1;loadBS(id,d);} }
+function bsToggle(d,id){ if(d.open&&!d.dataset.l)loadBS(id,d); }
 async function loadBS(id,d){
  const box=d.querySelector('.bs');
  try{
   const j=await (await fetch('/browse-server?id='+id)).json();
+  if(j.error)throw new Error(j.error);       // e.g. "no modlist (offline or password protected)"
+  if(!j.mods)throw new Error('unexpected response');
   const ok=j.mods.filter(m=>m.have).length;
+  d.dataset.l=1;   // latch only after a real answer, so reopening retries a failure
   box.innerHTML='<div class="dim">'+ok+' / '+j.mods.length+' mods on disk - '+sz(j.missingBytes||0)+' to download</div><ul>'+
    j.mods.map(m=>'<li>'+(m.have?'<span class="ok">&#10003;</span>':'<span class="dim">&#8226;</span>')+' '+esc(m.name)+' <span class="dim">'+(m.expB>0?sz(m.expB):'')+'</span></li>').join('')+'</ul>';
  }catch(e){ box.innerHTML='<span class="bad">'+esc(String(e).replace('Error: ',''))+'</span>'; }
@@ -858,7 +873,7 @@ async function tick(){
      x.suspects.map(z=>'<li class="bad">'+esc(z.name)+' - expected '+sz(z.expB)+', on disk '+sz(z.actB)+'</li>').join('')+'</ul>';}
    else t+='<br><span class="ok">No size mismatches - installed mods look intact.</span>';
    v.innerHTML=t;}
- }catch(e){}
+ }catch(e){say('status error: '+((e&&e.message)||e),false);}
 }
 async function post(w){
  try{
@@ -897,7 +912,7 @@ async function act(w){
  await post(w);
  if(b){b.disabled=false;b.textContent=w==='start'?'Start / Resume':w==='pause'?'Pause':w==='clear-queue'?'Clear queue':w==='resume-all'?'Queue all missing':'Verify mods';}
 }
-loadSrv();
+loadSrv();   // self-gated (5 s); tick retries it too, so this is the only call site
 (async function loop(){ await tick(); setTimeout(loop,200); })();   // one request in flight, ~0.4 s cadence
 </script></body></html>
 '@
@@ -1005,16 +1020,24 @@ while ($l.IsListening) {
       '/make-preset'  { $msg = Invoke-MakePreset $ctx.Request.QueryString['id'];  Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Cyan }
       '/add-server'   { $msg = Invoke-AddServer $ctx.Request.QueryString['id'];   Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Green }
       '/refresh-servers' { $msg = Invoke-RefreshServers; Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Cyan }
-      default   { $msg = $null; $ctx.Response.StatusCode = 404 }
+      default   {
+        $ctx.Response.StatusCode = 404
+        $b = [Text.Encoding]::UTF8.GetBytes('{"error":"no such route"}')
+        $ctx.Response.ContentType = 'application/json'
+        $ctx.Response.OutputStream.Write($b, 0, $b.Length)
+      }
     }
-    if ($msg) {
+    if ($null -ne $msg) {
       $b = [Text.Encoding]::UTF8.GetBytes((@{ ok = $true; msg = [string]$msg } | ConvertTo-Json -Compress))
       $ctx.Response.ContentType = 'application/json'
       $ctx.Response.OutputStream.Write($b, 0, $b.Length)
     }
   } catch {
     Write-Host $_.Exception.Message -ForegroundColor Red
-    $b = [Text.Encoding]::UTF8.GetBytes(('{"error":' + ($_.Exception.Message -replace '"',"'") + '}'))
+    # never hand-roll this json: a Windows path in the message ("C:\Users\...")
+    # contains \U, an illegal escape, so the page's r.json() threw a SyntaxError
+    # and showed that instead of the real error
+    $b = [Text.Encoding]::UTF8.GetBytes((@{ error = [string]$_.Exception.Message } | ConvertTo-Json -Compress))
     $ctx.Response.StatusCode = 500
     $ctx.Response.ContentType = 'application/json'
     $ctx.Response.OutputStream.Write($b, 0, $b.Length)
