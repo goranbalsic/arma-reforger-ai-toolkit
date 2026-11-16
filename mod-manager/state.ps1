@@ -5,6 +5,19 @@
 # copy of the completion rule. One copy, one rule.
 $script:exactCache = @{}
 
+function Get-OwnEngine([string]$ConfigPath) {
+  # ONLY an engine this tool launched: its command line must carry our config path.
+  # Matching the process name alone killed a community server the user runs
+  # themselves. Empty array = none; $null = the query itself failed, which must
+  # never read as "not running" or a second engine starts on the same profile.
+  try {
+    $found = @(Get-CimInstance Win32_Process -Filter "Name='ArmaReforgerServer.exe'" -ErrorAction Stop |
+      Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($ConfigPath, [StringComparison]::OrdinalIgnoreCase) -ge 0 } |
+      ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue })
+    return ,$found   # the comma keeps an empty result an array, not $null
+  } catch { return $null }
+}
+
 function Lock-Engine {
   # the dashboard and the watchdog both start/stop the engine. A named mutex
   # removes the check-then-act race that could put two DS processes on one profile

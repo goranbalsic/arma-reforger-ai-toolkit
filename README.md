@@ -26,6 +26,7 @@ the dedicated server files (used purely as a downloader).
 | `tools/deploy-mod.ps1` | Install a packed addon and enable it at the end of a launcher preset |
 | `install.ps1` | Copy the skill into an agent's skill folder, or `-Check` the toolchain |
 | `docs/debugging-stack.md` + `tools/audit.ps1` | Static checks for this repo (PSScriptAnalyzer, ruff, gitleaks at full speed; semgrep/trivy with `-Deep`) and the MCP wiring for OpenCode |
+| `tools/sync-dist.ps1` | Copy `mod-manager` into the public distribution repo, prune deleted scripts, build the release zip |
 
 ## Requirements
 

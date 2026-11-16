@@ -35,24 +35,13 @@ function Get-LatestLog {
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
 }
 
-function Get-Engine {
-  # ONLY our engine. The user may run a community server with the same process
-  # name, and the stall killer below must never kill it - filter by our config path.
-  # Returns $null when the query itself failed: "cannot ask" must not read as
-  # "not running", or a WMI hiccup would start a second engine on one profile.
-  try {
-    @(Get-CimInstance Win32_Process -Filter "Name='ArmaReforgerServer.exe'" -ErrorAction Stop |
-      Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($Cfg, [StringComparison]::OrdinalIgnoreCase) -ge 0 } |
-      ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue })
-  } catch { $null }
-}
 function Start-EngineLocked {
   # the dashboard can start the engine at the same moment: a named mutex + a
   # re-check means never two processes on one profile
   $ctl = Lock-Engine
   if (-not $ctl) { return $false }
   try {
-    $cur = Get-Engine
+    $cur = Get-OwnEngine $Cfg
     if ($null -eq $cur) { return $false }   # cannot ask: do not risk a second engine
     if ($cur) { return $false }
     Start-Process -FilePath $Exe -ArgumentList "-config `"$Cfg`" -profile `"$DsProfile`"" `
@@ -71,7 +60,7 @@ while ($true) {
   if (-not (Test-Path $Cfg)) { continue }
   if (Test-Path $PauseFlag) { continue }          # user pressed Pause
   $queued = Get-Queued
-  $ds = Get-Engine
+  $ds = Get-OwnEngine $Cfg
   if ($null -eq $ds) { Write-Wd 'cannot query processes right now - skipping this tick'; continue }
 
   if (-not $ds.Count) {

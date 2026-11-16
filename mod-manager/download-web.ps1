@@ -74,16 +74,12 @@ function Get-SkippedNames {
 }
 
 function Get-DS {
-  # only OUR engine: the config path must be in its command line. Matching the
-  # process name meant a community server you run yourself read as "ours" - the
-  # page showed its progress and Pause killed it. Cached 2 s: /status polls often
-  # and a WMI query per poll is not free; the name pre-check keeps the common
-  # "nothing running" case down to one cheap call.
+  # our engine only (state.ps1: Get-OwnEngine), cached 2 s because /status polls
+  # often and a WMI query per poll is not free. The name pre-check keeps the
+  # common "nothing running" case down to one cheap call.
   if (-not (Get-Process ArmaReforgerServer -ErrorAction SilentlyContinue)) { return }
   if ($script:dsAt -and ((Get-Date) - $script:dsAt).TotalSeconds -lt 2) { return $script:dsCache }
-  $script:dsCache = @(Get-CimInstance Win32_Process -Filter "Name='ArmaReforgerServer.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($Cfg, [StringComparison]::OrdinalIgnoreCase) -ge 0 } |
-    ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue })
+  $script:dsCache = Get-OwnEngine $Cfg
   $script:dsAt = Get-Date
   $script:dsCache
 }

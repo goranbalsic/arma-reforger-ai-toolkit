@@ -64,6 +64,10 @@ try { Save-Json @{} 'notapath' } catch { $threw = $true }
 Check 'a non-path is refused loudly'          $threw
 Check 'missing file returns the default'      ((Read-Json (Join-Path $tmp 'nope.json') 'dflt') -eq 'dflt')
 
+Write-Host 'engine ownership (only the engine we started)'
+$none = Get-OwnEngine (Join-Path $tmp 'no-such-config.json')
+Check 'no match is an empty array, not $null' (($null -ne $none) -and (@($none).Count -eq 0))
+
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 ""
 if ($fail) { "units: $fail failed"; exit 1 } else { 'units: OK' }
