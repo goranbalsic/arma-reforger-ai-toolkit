@@ -14,8 +14,8 @@ $Exe     = "$Root\armar-server\ArmaReforgerServer.exe"
 $Cfg     = "$Data\batch1-serverconfig.json"
 $Sizes   = "$Data\batch1-sizes.json"
 $ServersPath = "$Data\batch1-servers.json"
-$Profile = "$Root\serverprofile"
-$Addons  = "$Profile\addons"
+$DsProfile = "$Root\serverprofile"
+$Addons  = "$DsProfile\addons"
 $Url     = 'http://localhost:8123/'
 
 # first run on any machine: create empty state files instead of failing
@@ -96,7 +96,7 @@ function Get-DS { Get-Process ArmaReforgerServer -ErrorAction SilentlyContinue }
 function Get-Log {
   # newest console.log; cached 3 s because the DS is writing to disk while we scan
   if ($script:logCache -and ((Get-Date) - $script:logCacheAt).TotalSeconds -lt 3) { return $script:logCache }
-  $script:logCache = Get-ChildItem "$Profile\logs" -Recurse -Filter console.log -ErrorAction SilentlyContinue |
+  $script:logCache = Get-ChildItem "$DsProfile\logs" -Recurse -Filter console.log -ErrorAction SilentlyContinue |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
   $script:logCacheAt = Get-Date
   $script:logCache
@@ -347,7 +347,7 @@ function Start-DS {
   # the 1 MB download-list trap: trimming is lossless (DS skips done mods anyway),
   # skipping it makes the DS insta-crash ~30 s after a false "started"
   & "$PSScriptRoot\trim-config.ps1" | Out-Null
-  $dsArgs = "-config `"$Cfg`" -profile `"$Profile`""
+  $dsArgs = "-config `"$Cfg`" -profile `"$DsProfile`""
   foreach ($try in 1, 2) {
     Start-Process -FilePath $Exe -ArgumentList $dsArgs `
       -WorkingDirectory "$Root\armar-server" -WindowStyle Hidden

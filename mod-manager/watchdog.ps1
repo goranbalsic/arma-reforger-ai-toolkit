@@ -11,7 +11,7 @@ $Root = if ($env:RFMM_HOME) { $env:RFMM_HOME } else { $PSScriptRoot }
 $Data = if ($env:RFMM_DATA) { $env:RFMM_DATA } else { Join-Path $PSScriptRoot 'data' }
 $Cfg = "$Data\batch1-serverconfig.json"
 $Exe = "$Root\armar-server\ArmaReforgerServer.exe"
-$Profile = "$Root\serverprofile"
+$DsProfile = "$Root\serverprofile"
 $LogFile = "$Data\watchdog.log"
 $PauseFlag = "$Data\paused.flag"
 $SkipFile = "$Data\skipped.json"
@@ -34,7 +34,7 @@ function Get-Queued {
   } catch { return @() }
 }
 function Get-LatestLog {
-  Get-ChildItem "$Profile\logs" -Recurse -Filter console.log -ErrorAction SilentlyContinue |
+  Get-ChildItem "$DsProfile\logs" -Recurse -Filter console.log -ErrorAction SilentlyContinue |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
 }
 
@@ -99,7 +99,7 @@ while ($true) {
       if (-not $saidEmpty) { Write-Wd 'queue empty - downloader done'; $saidEmpty = $true }
       continue
     }
-    Start-Process -FilePath $Exe -ArgumentList "-config `"$Cfg`" -profile `"$Profile`"" `
+    Start-Process -FilePath $Exe -ArgumentList "-config `"$Cfg`" -profile `"$DsProfile`"" `
       -WorkingDirectory "$Root\armar-server" -WindowStyle Hidden
     Write-Wd "restarted downloader ($($queued.Count) mods left)"
     continue
@@ -118,7 +118,7 @@ while ($true) {
       # request over the DS's ~1 MB limit, and the restart would insta-crash
       try { & "$PSScriptRoot\trim-config.ps1" | Out-Null }
       catch { Write-Wd "trim failed: $($_.Exception.Message)" }
-      Start-Process -FilePath $Exe -ArgumentList "-config `"$Cfg`" -profile `"$Profile`"" `
+      Start-Process -FilePath $Exe -ArgumentList "-config `"$Cfg`" -profile `"$DsProfile`"" `
         -WorkingDirectory "$Root\armar-server" -WindowStyle Hidden
     }
   }
