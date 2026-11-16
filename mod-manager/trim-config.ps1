@@ -53,6 +53,9 @@ if (-not $j -or -not $j.game) {
   $j = '{"game":{"mods":[]}}' | ConvertFrom-Json
   "config was empty or unreadable - recreated"
 }
+# the DS writes "mods": null on shutdown; piping that yields one $null item and
+# ContainsKey($null) throws, which left the config unrepaired
+if ($null -eq $j.game.mods) { $j.game.mods = @() }
 $left = @($j.game.mods | Where-Object { -not $done.ContainsKey($_.modId) })
 "config: $(@($j.game.mods).Count) -> remaining: $($left.Count)"
 

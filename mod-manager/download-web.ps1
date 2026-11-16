@@ -46,7 +46,15 @@ function Read-Json([string]$Path, $Default) {
     return $Default
   }
 }
-function Get-Cfg { Read-Json $Cfg ('{"game":{"mods":[]}}' | ConvertFrom-Json) }
+function Get-Cfg {
+  $j = Read-Json $Cfg ('{"game":{"mods":[]}}' | ConvertFrom-Json)
+  if ($null -eq $j -or $null -eq $j.game) { $j = '{"game":{"mods":[]}}' | ConvertFrom-Json }
+  # the DS writes "mods": null back into the config on shutdown, and @($null).Count
+  # is 1 - so every caller believed one mod was still queued when the queue was
+  # empty (Start skipped the partial resume, trim started an empty DS)
+  if ($null -eq $j.game.mods) { $j.game.mods = @() }
+  $j
+}
 
 $j = Read-Json $Sizes ('{"totalBytes":0,"mods":{}}' | ConvertFrom-Json)
 $sizeMap = @{}

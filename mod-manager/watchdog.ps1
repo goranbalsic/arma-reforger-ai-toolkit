@@ -25,7 +25,13 @@ function Save-Json($obj, [string]$Path) {
   if (Test-Path $Path) { [IO.File]::Replace($tmp, $Path, [NullString]::Value) } else { Move-Item $tmp $Path -Force }
 }
 function Get-Queued {
-  try { return @((Get-Content $Cfg -Raw | ConvertFrom-Json).game.mods) } catch { return @() }
+  try {
+    $m = (Get-Content $Cfg -Raw | ConvertFrom-Json).game.mods
+    # the DS writes "mods": null on shutdown and @($null).Count is 1, so the
+    # watchdog believed one mod was queued forever and restarted the DS in a loop
+    if ($null -eq $m) { return @() }
+    return @($m)
+  } catch { return @() }
 }
 function Get-LatestLog {
   Get-ChildItem "$Profile\logs" -Recurse -Filter console.log -ErrorAction SilentlyContinue |
@@ -71,7 +77,8 @@ while ($true) {
       }
     }
 
-    & "$PSScriptRoot\trim-config.ps1" | Out-Null
+    try { & "$PSScriptRoot\trim-config.ps1" | Out-Null }
+    catch { Write-Wd "trim failed: $($_.Exception.Message)"; continue }   # never start an untrimmed list (1 MB trap)
     $queued = Get-Queued
     if ($queued.Count -eq 0) { Write-Wd 'queue empty - downloader done'; continue }
     Start-Process -FilePath $Exe -ArgumentList "-config `"$Cfg`" -profile `"$Profile`"" `
