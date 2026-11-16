@@ -104,6 +104,20 @@ function Get-Log {
 
 $script:dirCache = $null; $script:dirCacheAt = (Get-Date).AddMinutes(-10)
 $script:clCache = @(); $script:clCacheAt = (Get-Date).AddMinutes(-10)
+$script:clBytes = [double]0; $script:clBytesAt = (Get-Date).AddMinutes(-10)
+
+function Get-AddonsBytes {
+  # total size of the game's addons folder. The page shows this as "done", so the
+  # number is the folder you can look at in Explorer, not an estimate.
+  if (((Get-Date) - $script:clBytesAt).TotalSeconds -lt 15) { return $script:clBytes }
+  $sum = [double]0
+  $root = [IO.DirectoryInfo]::new("$env:USERPROFILE\Documents\My Games\ArmaReforger\addons")
+  if ($root.Exists) {
+    try { foreach ($f in $root.EnumerateFiles('*', [IO.SearchOption]::AllDirectories)) { $sum += $f.Length } } catch { }
+  }
+  $script:clBytes = $sum; $script:clBytesAt = Get-Date
+  $sum
+}
 
 function Get-ClientIds {
   # exact rule (the addon's own meta file list), same as Get-HaveIds and verify.
@@ -319,6 +333,7 @@ function Get-Status {
      pct = if ($TotalBytes -gt 0) { [Math]::Min(100, [int](100 * $doneBytes / $TotalBytes)) } else { 0 }
      pctF = if ($TotalBytes -gt 0) { [Math]::Round([Math]::Min(100, 100 * $doneBytes / $TotalBytes), 2) } else { 0 }
      doneCount = $doneCount; totalMods = $sizeMap.Count
+     addonsB = (Get-AddonsBytes)
      active = @($active); recent = @($recent); cl = $clIds; failed = (Get-SkippedNames)
      queue = @($queueList); tok = $token; verify = $verify }
 }
@@ -494,6 +509,82 @@ function Invoke-MakePreset([string]$Id) {
   ($out | Out-String).Trim()
 }
 
+function Search-Mods([string]$q, [int]$page) {
+  # live Workshop search: the same keys the workshop site uses - name, author, or
+  # the 16-character mod id. The search endpoint matches name and author; an id is
+  # looked up directly. Cached 15 s per query like Get-Browse.
+  if ($q -match '^[0-9A-Fa-f]{16}$') {
+    $key = "id:$($q.ToUpper())"
+    if ($script:bCache[$key] -and ((Get-Date) - $script:bCacheAt[$key]).TotalSeconds -lt 60) { return $script:bCache[$key] }
+    $m = (Invoke-RestMethod -Uri "$ApiBase/mods/$($q.ToUpper())" -Headers $ApiH -TimeoutSec 30).mod
+    $r = @{ total = 1; page = 1; pages = 1; mods = @($m) }
+    $script:bCache[$key] = $r; $script:bCacheAt[$key] = Get-Date
+    return $r
+  }
+  if (-not $q) { return @{ total = 0; page = 1; pages = 0; mods = @() } }
+  if ($page -lt 1) { $page = 1 }
+  $key = "s:$($q.ToLower()):$page"
+  if ($script:bCache[$key] -and ((Get-Date) - $script:bCacheAt[$key]).TotalSeconds -lt 15) { return $script:bCache[$key] }
+  $r = Invoke-RestMethod -Uri "$ApiBase/mods?search=$([uri]::EscapeDataString($q))&limit=24&page=$page" -Headers $ApiH -TimeoutSec 30
+  $res = @{ total = [int]$r.meta.totalMods; page = $page
+            pages = $(if ($r.meta.totalPages) { [int]$r.meta.totalPages } else { 1 })
+            mods = @($r.data) }
+  $script:bCache[$key] = $res; $script:bCacheAt[$key] = Get-Date
+  $res
+}
+
+function Get-ModDeps([string]$Id) {
+  # dependencies of one mod (ids, names, sizes). The DS pulls them by itself, but
+  # then the queue and the total size would hide them.
+  try { @((Invoke-RestMethod -Uri "$ApiBase/mods/$Id/dependencies" -Headers $ApiH -TimeoutSec 30).data.dependencies) }
+  catch { @() }
+}
+
+function Invoke-AddMod([string]$Id) {
+  # add ONE workshop mod (plus its dependencies) to the download queue, at the end
+  if ($Id -notmatch '^[0-9A-Fa-f]{16}$') { throw 'not a mod id' }
+  $Id = $Id.ToUpper()
+  $have = Get-HaveIds
+  $j = Get-Cfg
+  $queued = @{}
+  foreach ($m in $j.game.mods) { $queued[$m.modId] = $true }
+  if ($queued.ContainsKey($Id) -or $have.ContainsKey($Id)) { return "already $(if ($have.ContainsKey($Id)) { 'installed' } else { 'queued' }) - nothing to add" }
+  $m = (Invoke-RestMethod -Uri "$ApiBase/mods/$Id" -Headers $ApiH -TimeoutSec 30).mod
+  $add = @([PSCustomObject]@{ modId = $Id; name = [string]$m.name; size = [double]$m.size })
+  $depNames = @()
+  $seen = @{}; $seen[$Id] = $true
+  $queue2 = @(@{ id = $Id; depth = 0 })
+  while ($queue2.Count) {
+    $cur = $queue2[0]; $queue2 = @($queue2 | Select-Object -Skip 1)
+    if ($cur.depth -ge 3) { continue }
+    foreach ($d in (Get-ModDeps $cur.id)) {
+      if ($d.id -notmatch '^[0-9A-Fa-f]{16}$') { continue }
+      $did = $d.id.ToUpper()
+      if ($seen[$did] -or $queued.ContainsKey($did) -or $have.ContainsKey($did)) { continue }
+      $seen[$did] = $true
+      $add += [PSCustomObject]@{ modId = $did; name = [string]$d.name; size = [double]$d.size }
+      $depNames += [string]$d.name
+      $queue2 += @{ id = $did; depth = $cur.depth + 1 }
+    }
+  }
+  $j.game.mods = @($j.game.mods) + @($add | ForEach-Object { [PSCustomObject]@{ modId = $_.modId; name = $_.name } })
+  Save-Json $j $Cfg
+  # merge the sizes (merge-only: a replace would destroy the rest of the map)
+  $sz = Read-Json $Sizes ('{"totalBytes":0,"mods":{}}' | ConvertFrom-Json)
+  foreach ($a in $add) {
+    if ($script:sizeMap.ContainsKey($a.modId)) { continue }
+    $script:sizeMap[$a.modId] = @{ name = $a.name; bytes = [double]$a.size; exact = [bool]($a.size -gt 0) }
+    $sz.mods | Add-Member -NotePropertyName $a.modId `
+      -NotePropertyValue ([PSCustomObject]@{ name = $a.name; bytes = [double]$a.size; exact = [bool]($a.size -gt 0) }) -Force
+  }
+  $script:TotalBytes = ($script:sizeMap.Values | ForEach-Object { [double]$_.bytes } | Measure-Object -Sum).Sum
+  $sz.totalBytes = [double]$script:TotalBytes
+  Save-Json $sz $Sizes 4
+  $msg = "queued '$($m.name)' ($([Math]::Round([double]$m.size / 1GB, 2)) GB)"
+  if ($depNames.Count) { $msg += " + $($depNames.Count) dependency mod(s): $($depNames -join ', ')" }
+  "$msg - press Start"
+}
+
 function Get-Browse([string]$q) {
   # live server list from the public reforgermods API, cached 15 s per query
   $key = $q.ToLower()
@@ -664,7 +755,7 @@ function Invoke-ResumeAll {
 # per-run token: the six state-changing endpoints only answer requests that carry
 # it, so another website open in the browser cannot drive this server (CSRF)
 $token = [guid]::NewGuid().ToString('N')
-$mutating = '/start','/pause','/verify','/queue-server','/resume-batch','/resume-all','/clear-queue','/make-preset','/add-server','/refresh-servers'
+$mutating = '/start','/pause','/verify','/queue-server','/resume-batch','/resume-all','/clear-queue','/make-preset','/add-server','/refresh-servers','/add-mod'
 
 $html = @'
 <!doctype html><html><head><meta charset="utf-8"><title>Reforger Mods Download</title>
@@ -720,6 +811,7 @@ $html = @'
   <button id="bverify" class="amber" onclick="act('verify')">Verify mods</button>
  </div>
  <div id="vres" class="card" style="margin:14px 0 0;padding:10px 14px"></div>
+ <div class="dim" id="addonsline" style="font-size:13px;margin-top:6px"></div>
  <div id="say" class="dim" style="margin-top:10px;font-size:13px;min-height:18px"></div>
  <div id="failed" class="bad" style="font-size:13px;margin-top:4px"></div>
 </div>
@@ -734,6 +826,14 @@ $html = @'
 <details class="card" open><summary><h2 style="font-size:15px;color:#fff">Server browser <span class="dim">live</span></h2></summary>
  <div style="margin-top:8px"><input id="bq" placeholder="search servers (e.g. PVE, Cold Front, Vietnam)..." oninput="browseCleared()" onkeydown="if(event.key==='Enter')browse()"><button onclick="browse()">Search</button></div>
  <div id="bs" class="dim" style="margin-top:8px">type a server name and press Enter</div>
+</details>
+<details class="card" open><summary><h2 style="font-size:15px;color:#fff">Download individual mods <span class="dim">live workshop</span></h2></summary>
+ <div style="margin-top:8px;display:flex;gap:8px">
+  <input id="mq" placeholder="mod name, author, or 16-character mod id" onkeydown="if(event.key==='Enter')searchMods(1)">
+  <button onclick="searchMods(1)">Search</button></div>
+ <div id="msaid" class="dim" style="margin-top:6px;min-height:18px;font-size:13px"></div>
+ <div id="mres" class="dim" style="margin-top:4px">Type a name, an author, or a mod id and press Enter. Added mods (with their dependencies) go to the Queue above.</div>
+ <div id="mpager" style="margin-top:6px"></div>
 </details>
 <details class="card" open><summary><h2 style="font-size:15px;color:#fff">Servers <span id="srvcount" class="dim"></span><button class="mini" onclick="refreshSrv(event)" title="re-read disk + pull fresh modlists from reforgermods.net">Refresh all</button></h2></summary><div id="srv" class="dim" style="margin-top:8px">loading server lists...</div></details>
 <details class="card"><summary><h2 style="font-size:15px;color:#fff">Completed <span id="reccount" class="dim"></span></h2></summary>
@@ -849,6 +949,34 @@ async function loadBS(id,d){
  }catch(e){ box.innerHTML='<span class="bad">'+esc(String(e).replace('Error: ',''))+'</span>'; }
 }
 function say(t,ok){const e=document.getElementById('say'); if(!e)return; e.textContent=t||''; e.className=t?(ok===false?'bad':ok===true?'ok':'dim'):'dim';}
+let MRES=null;
+async function searchMods(p){
+ const q=document.getElementById('mq').value.trim();
+ const out=document.getElementById('msaid');
+ if(!q){document.getElementById('mres').innerHTML='<span class="dim">Type a name, an author, or a mod id.</span>';return;}
+ out.className='dim'; out.textContent='searching...';
+ try{
+  const r=await (await fetch('/search-mods?q='+encodeURIComponent(q)+'&page='+(p||1))).json();
+  if(r.error)throw new Error(r.error);
+  MRES=r; renderMods(); out.textContent=r.total?(r.total+' mods found'):'nothing found';
+ }catch(e){out.className='bad'; out.textContent='search failed: '+e.message;}
+}
+function renderMods(){
+ const el=document.getElementById('mres'); if(!MRES)return;
+ if(!MRES.mods.length){el.innerHTML='<span class="dim">nothing found</span>';el.className='dim';return;}
+ el.className='';
+ el.innerHTML=MRES.mods.map(m=>{
+  const inst=LAST&&LAST.D&&LAST.D[m.id];
+  return '<div class="row"><div style="flex:1;min-width:0"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(m.name)+'</div>'+
+   '<div class="dim" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px">'+esc(m.author||'')+' &middot; '+sz(m.size)+(m.version?' &middot; v'+esc(m.version):'')+'</div></div>'+
+   '<span>'+(inst?'<span class="ok">installed</span>':'<button class="mini" onclick="addMod(\''+escAttr(m.id)+'\')">Add</button>')+'</span></div>';
+ }).join('');
+ document.getElementById('mpager').innerHTML = MRES.pages>1?('<button class="mini grey" '+(MRES.page<=1?'disabled':'')+' onclick="searchMods('+(MRES.page-1)+')">&larr; prev</button> <span class="dim">page '+MRES.page+' / '+MRES.pages+'</span> <button class="mini grey" '+(MRES.page>=MRES.pages?'disabled':'')+' onclick="searchMods('+(MRES.page+1)+')">next &rarr;</button>'):'';
+}
+async function addMod(id){
+ await post('add-mod?id='+encodeURIComponent(id));
+ if(MRES)renderMods();
+}
 async function addSrv(id,ev){
  ev.stopPropagation();
  const b=ev.target; b.disabled=true; b.textContent='adding...';
@@ -889,6 +1017,8 @@ async function tick(){
   }
   const f=document.getElementById('failed');
   if(f)f.textContent=(s.failed&&s.failed.length)?('skipped after repeated Workshop errors: '+s.failed.join(', ')):'';
+  const al=document.getElementById('addonsline');
+  if(al)al.textContent='in your addons folder: '+sz(s.addonsB||0);
   const v=document.getElementById('vres');
   if(s.verify){v.style.display='block';const x=s.verify;
    let t='<b>Verify '+x.at+'</b> - <span class="ok">'+x.ok+' ok</span>, '+x.partial+' partial, '+x.pending+' pending';
@@ -1041,6 +1171,17 @@ while ($l.IsListening) {
       '/resume-all'   { $msg = Invoke-ResumeAll;   Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Green }
       '/clear-queue'  { $msg = Invoke-ClearQueue;  Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Yellow }
       '/make-preset'  { $msg = Invoke-MakePreset $ctx.Request.QueryString['id'];  Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Cyan }
+      '/search-mods' {
+        $r = Search-Mods ([string]$ctx.Request.QueryString['q']) ([int]$ctx.Request.QueryString['page'])
+        $mods = @($r.mods | ForEach-Object {
+          [PSCustomObject]@{ id = $_.id; name = $_.name; author = $_.author
+                             size = [double]$_.size; version = $_.version }
+        })
+        $b = [Text.Encoding]::UTF8.GetBytes((@{ total = $r.total; page = $r.page; pages = $r.pages; mods = $mods } | ConvertTo-Json -Depth 4 -Compress))
+        $ctx.Response.ContentType = 'application/json'
+        $ctx.Response.OutputStream.Write($b, 0, $b.Length)
+      }
+      '/add-mod' { $msg = Invoke-AddMod $ctx.Request.QueryString['id']; Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Green }
       '/add-server'   { $msg = Invoke-AddServer $ctx.Request.QueryString['id'];   Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Green }
       '/refresh-servers' { $msg = Invoke-RefreshServers; Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Cyan }
       default   {
