@@ -75,16 +75,27 @@ parts (optional):
 Leave them unset and everything stays inside this folder. That is also how you
 keep two independent setups on one machine.
 
+Set them **in the same shell that starts the dashboard**, and be aware they are
+only process environment: on this machine they are not persisted anywhere, so a
+dashboard started from a plain shell comes up on the empty `data\` next to the
+scripts and looks like a fresh install. `test-rules.ps1` fails with an explicit
+message when it is pointed at the wrong tree instead of reporting every mod as
+missing.
+
 ## How "installed" is decided
 
-A mod counts as installed when there is a folder with its id whose files match
-the Workshop size (±2 %) and which has not been written to for 2 minutes. The
-three assembly files (`addon.gproj`, `meta`, `resourceDatabase.rdb`) are only
-required when the size is unknown — many Workshop mods ship without
-`addon.gproj`, and requiring it left finished mods unsynced.
+A mod counts as installed when the file list in its own `meta` matches the disk
+exactly: every file that `meta` names exists and has the size it records there
+(the game itself reads `meta` this way). The folder must also be quiet for 2
+minutes, so a download in flight is never mistaken for a finished one.
 
-The dashboard, the queue trimming, the client copy and `test-rules.ps1` all use
-this one rule.
+The dashboard, the queue trimming, the client copy, `add-server`, `verify`,
+`make-preset` (it needs a resolvable `meta`) and `test-rules.ps1` all use this one
+rule. A folder's total size is never used: it lies for small mods (a 2 MB
+tolerance made a 921 KB mod "installed" at 202 KB), it lies when the Workshop size
+in `data\batch1-sizes.json` goes stale after a mod update, and it hides the markers
+the DS writes before the data paks. Some Workshop mods legitimately lack
+`addon.gproj`; every real addon has `meta`.
 
 ## Traps the code handles (do not "simplify" them away)
 
@@ -99,9 +110,18 @@ this one rule.
   that are installed are included: the launcher deletes entries it cannot
   resolve, which poisons the whole preset.
 - **PowerShell is case-insensitive**: never name a local variable `$cfg`/`$Cfg`
-  or it shadows the script's `$Cfg` path and leaks into other functions.
-- **Mod folders can legitimately lack `addon.gproj`** (8-file dev packs). The
-  completion rule must stay size-based for those.
+  or it shadows the script's `$Cfg` path and leaks into other functions. Same for
+  the automatic variables: the DS profile path is `$DsProfile`, not `$Profile`.
+- **The DS rewrites the config on exit**: anything appended while it runs is
+  discarded, so every handler that writes the queue stops it first.
+- **`"mods": null` means an empty queue**, not one mod: `@($null).Count` is 1 in
+  PowerShell, and the DS writes exactly that shape on shutdown.
+- **State files are written atomically and read tolerantly**: closing the console
+  window kills the process mid-write, so a save goes to `.tmp` and is swapped in,
+  and an unreadable file is renamed `*.corrupt-<timestamp>` (never deleted) so one
+  bad file cannot stop the dashboard from starting.
+- **Mod folders can legitimately lack `addon.gproj`** (8-file dev packs); every
+  real addon has `meta`, which is what decides completion.
 
 ## Tests
 
