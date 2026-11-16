@@ -28,7 +28,7 @@ gate - `PSAvoidAssignmentToAutomaticVariable` is the one to watch by hand.
 | Tool | Repo | What it catches | Run |
 | --- | --- | --- | --- |
 | Semgrep | [semgrep/semgrep](https://github.com/semgrep/semgrep) | security patterns across languages, taint-style rules, secrets | `uvx semgrep --config p/ci --config p/secrets --config p/python .` |
-| Trivy | [aquasecurity/trivy](https://github.com/aquasecurity/trivy) | dependency CVEs, secrets, IaC misconfig in a folder | `trivy fs --scanners vuln,secret,misconfig .` |
+| Trivy | [aquasecurity/trivy](https://github.com/aquasecurity/trivy) | dependency CVEs, secrets in a folder | `trivy fs --scanners vuln,secret .` |
 | osv-scanner | [google/osv-scanner](https://github.com/google/osv-scanner) | dependency CVEs via OSV (alternative to Trivy) | `osv-scanner --lockfile=<file> .` |
 
 Notes:
