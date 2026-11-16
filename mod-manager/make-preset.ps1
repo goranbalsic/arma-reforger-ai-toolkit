@@ -11,7 +11,8 @@ param(
   [Parameter(Mandatory = $true)][string]$ServerId,
   [string]$ConfPath,
   [string]$Name,                 # preset name (default: the server's short name)
-  [string[]]$Exclude = @()       # regex patterns: mods whose name matches are left out
+  [string[]]$Exclude = @(),      # regex patterns: mods whose name matches are left out
+  [string]$AddonsDir             # client addons folder (default: the game's)
 )
 $ErrorActionPreference = 'Stop'
 $Data = if ($env:RFMM_DATA) { $env:RFMM_DATA } else { Join-Path $PSScriptRoot 'data' }
@@ -25,7 +26,7 @@ $conf = if ($ConfPath) { $ConfPath } else {
   $f.FullName
 }
 $srvs = Get-Content "$Data\batch1-servers.json" -Raw | ConvertFrom-Json
-$clAddons = "$env:USERPROFILE\Documents\My Games\ArmaReforger\addons"
+$clAddons = if ($AddonsDir) { $AddonsDir } else { "$env:USERPROFILE\Documents\My Games\ArmaReforger\addons" }
 
 # any running client build (Steam, MS Store, DX12 variants), never the dedicated
 # server: the game rewrites this file on exit and the preset would vanish

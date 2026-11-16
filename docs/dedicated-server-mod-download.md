@@ -163,7 +163,7 @@ single POST per chunk and unaffected in practice.
   `/v2/mods/{id}` (throttle under the 60 req/min limit).
 - **Sizes files are merge-only**: the DS config is trimmed to remaining mods,
   so any script that rebuilds a sizes file *from the config* and *replaces*
-  the existing file destroys the full map. `get-sizes.ps1` merges; the same
+  the existing file destroys the full map. `fix-sizes.ps1` merges (merge-only; `get-sizes.ps1` was folded into it); the same
   applies to any future size tool.
 
 ## Notes

@@ -33,7 +33,9 @@ while ($true) {
   else {
     # a single failed /status fetch must not silently stop the mirror forever
     $miss++
-    if ($miss -ge 3) { exit 0 }   # dashboard gone -> loop dies with it
+    # keep retrying: the dashboard is often restarted for a few minutes and this
+    # loop is the only thing that mirrors finished mods into the game folder
+    if ($miss -eq 3) { Write-Host "dashboard not reachable - still retrying every 60 s" -ForegroundColor Yellow }
   }
   Start-Sleep 60
 }

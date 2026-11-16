@@ -51,12 +51,12 @@ foreach ($sv in $serverList) { foreach ($m in $sv.mods) {
 
 $verify = $null   # last verify result shown on the page
 $script:maxDone = [double]0; $script:maxDoneTotal = [double]0   # high-water progress: the DS deletes temp files, so raw bytes dip
-$script:pausedByUser = $false                                   # explicit Pause flag for watchdog.ps1
 $script:skipped = @(); $script:skippedAt = (Get-Date).AddMinutes(-10)
 $script:rateSamples = @()                                      # rolling byte-rate for a live speed
 $script:activeMax = @{}                                        # per-mod high-water progress
 $script:exactCache = @{}                                       # path -> exact package check
 $script:logCache = $null; $script:logCacheAt = (Get-Date).AddMinutes(-1)
+$script:dsCache = $null; $script:dsAt = (Get-Date).AddMinutes(-1)
 $script:speedCache = @{ b = 0; age = 999 }; $script:speedCacheAt = (Get-Date).AddMinutes(-5)
 
 $ApiBase = 'https://api.reforgermods.net/v2'
@@ -73,7 +73,20 @@ function Get-SkippedNames {
   $script:skipped
 }
 
-function Get-DS { Get-Process ArmaReforgerServer -ErrorAction SilentlyContinue }
+function Get-DS {
+  # only OUR engine: the config path must be in its command line. Matching the
+  # process name meant a community server you run yourself read as "ours" - the
+  # page showed its progress and Pause killed it. Cached 2 s: /status polls often
+  # and a WMI query per poll is not free; the name pre-check keeps the common
+  # "nothing running" case down to one cheap call.
+  if (-not (Get-Process ArmaReforgerServer -ErrorAction SilentlyContinue)) { return }
+  if ($script:dsAt -and ((Get-Date) - $script:dsAt).TotalSeconds -lt 2) { return $script:dsCache }
+  $script:dsCache = @(Get-CimInstance Win32_Process -Filter "Name='ArmaReforgerServer.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($Cfg, [StringComparison]::OrdinalIgnoreCase) -ge 0 } |
+    ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue })
+  $script:dsAt = Get-Date
+  $script:dsCache
+}
 
 function Get-Log {
   # newest console.log; cached 3 s because the DS is writing to disk while we scan
@@ -303,12 +316,16 @@ if ($Check) {
 
 
 function Start-DS {
-  $script:pausedByUser = $false
   Remove-Item (Join-Path $Data 'paused.flag') -Force -ErrorAction SilentlyContinue
   $ctl = Lock-Engine
   if (-not $ctl) { return 'another start/stop is in progress - try again' }
   try {
-    if (Get-DS) { return 'already running' }
+    if (@(Get-DS).Count) { return 'already running' }
+    # a server we did not start shares the profile folder the engine writes to:
+    # refuse instead of running two of them (and never stop theirs on Pause)
+    if (Get-Process ArmaReforgerServer -ErrorAction SilentlyContinue) {
+      return 'another ArmaReforgerServer is already running - close it, then press Start'
+    }
     # resume interrupted work: a partial download is not in the queue after Clear
     # queue, but Start / Resume should continue it instead of saying "empty"
     $j0 = Get-Cfg
@@ -336,7 +353,6 @@ function Start-DS {
 }
 
 function Stop-DS {
-  $script:pausedByUser = $true   # the watchdog must not undo an explicit pause
   New-Item -ItemType File -Force (Join-Path $Data 'paused.flag') | Out-Null
   $ctl = Lock-Engine
   try {
@@ -420,23 +436,6 @@ function Invoke-QueueServer([string]$Id) {
   "queue: $($first.Count) missing mods of '$name' download first, then the other $($rest.Count) batch mods follow ($already of $($srv.mods.Count) already installed) ($r)"
 }
 
-function Invoke-ResumeBatch {
-  # every mod the tracked servers run that is not on disk. It used to walk only
-  # $sizeMap, so a mod whose size never resolved was never queued by this button
-  # while "Queue all missing" did queue it (that one unions servers + sizes).
-  $have = Get-HaveIds
-  $want = [ordered]@{}
-  foreach ($sv in $serverList) { foreach ($m in $sv.mods) { $want[$m.id] = $m.name } }
-  foreach ($id in $sizeMap.Keys) { if (-not $want.Contains($id)) { $want[$id] = [string]$sizeMap[$id].name } }
-  $mods = @($want.Keys | Where-Object { -not $have.ContainsKey($_) } |
-    ForEach-Object { [PSCustomObject]@{ modId = $_; name = [string]$want[$_] } })
-  $j = Get-Cfg
-  $j.game.mods = $mods
-  Save-Json $j $Cfg
-  Stop-DS | Out-Null
-  $r = Start-DS
-  "full batch resumed: $($mods.Count) mods remaining ($r)"
-}
 
 function Get-PartialMods {
   # mods that were started but are not complete (the resume set)
@@ -725,7 +724,7 @@ function Invoke-ResumeAll {
 # per-run token: the six state-changing endpoints only answer requests that carry
 # it, so another website open in the browser cannot drive this server (CSRF)
 $token = [guid]::NewGuid().ToString('N')
-$mutating = '/start','/pause','/verify','/queue-server','/resume-batch','/resume-all','/clear-queue','/make-preset','/add-server','/refresh-servers','/add-mod'
+$mutating = '/start','/pause','/verify','/queue-server','/resume-all','/clear-queue','/make-preset','/add-server','/refresh-servers','/add-mod'
 
 $html = @'
 <!doctype html><html><head><meta charset="utf-8"><title>Reforger Mods Download</title>
@@ -1151,7 +1150,6 @@ while ($l.IsListening) {
       '/pause'  { $msg = Stop-DS;         Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Yellow }
       '/verify' { $msg = Invoke-Verify;   Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Cyan }
       '/queue-server' { $msg = Invoke-QueueServer $ctx.Request.QueryString['id']; Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Green }
-      '/resume-batch' { $msg = Invoke-ResumeBatch; Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Green }
       '/resume-all'   { $msg = Invoke-ResumeAll;   Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Green }
       '/clear-queue'  { $msg = Invoke-ClearQueue;  Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Yellow }
       '/make-preset'  { $msg = Invoke-MakePreset $ctx.Request.QueryString['id'];  Write-Host "[$(Get-Date -f HH:mm:ss)] $msg" -ForegroundColor Cyan }

@@ -1,7 +1,6 @@
 # Shared state helpers. Dot-source this; do not copy it.
 #
-# These three functions were pasted into five scripts (download-web, watchdog,
-# trim-config, add-server, test-rules, get-sizes) and drifted: the File.Replace
+# these helpers were pasted into five scripts and drifted: the File.Replace
 # null-argument bug had to be fixed five times, and test-rules asserted its own
 # copy of the completion rule. One copy, one rule.
 $script:exactCache = @{}
@@ -11,7 +10,14 @@ function Lock-Engine {
   # removes the check-then-act race that could put two DS processes on one profile
   # (both write <mod>\temp\, so an assembled pak can be a mix of two downloads).
   $m = [Threading.Mutex]::new($false, 'ReforgerEngineCtl')
-  if (-not $m.WaitOne(20000)) { return $null }
+  try {
+    if (-not $m.WaitOne(20000)) { return $null }
+  } catch [System.Threading.AbandonedMutexException] {
+    # the previous holder died inside the critical section. WaitOne takes ownership
+    # anyway, but it throws instead of returning - without this the engine could
+    # never be started again for the life of this process.
+    return $m
+  }
   $m
 }
 
