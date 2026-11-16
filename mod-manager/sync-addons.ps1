@@ -19,11 +19,13 @@ function Sync-Completed {
   $true
 }
 
-if (-not $Loop) { if (Sync-Completed) { exit 0 } else { Write-Host 'dashboard not reachable' -ForegroundColor Red; exit 1 } }
-
-# one loop instance only: named mutex kills the check-then-start race
+# one writer at a time, including the one-shot form: robocopy /MIR deletes in the
+# destination, so a manual run during the loop's copy can delete files it is
+# still writing. The mutex kills that race.
 $mutex = [System.Threading.Mutex]::new($false, 'ReforgerSyncLoop')
-if (-not $mutex.WaitOne(0)) { exit 0 }
+if (-not $mutex.WaitOne(0)) { Write-Host 'another sync is already running' -ForegroundColor Yellow; exit 0 }
+
+if (-not $Loop) { if (Sync-Completed) { exit 0 } else { Write-Host 'dashboard not reachable' -ForegroundColor Red; exit 1 } }
 
 $miss = 0
 while ($true) {
