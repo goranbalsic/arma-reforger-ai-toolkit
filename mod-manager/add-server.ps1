@@ -1,8 +1,9 @@
 # Add one server's modlist to the batch: fetch, union, subtract what is installed
 # or queued, merge into the DS config (which holds only the not-yet-downloaded
 # mods) and add sizes. The dashboard's "Add server" browser button does the same
-# thing live (with a DS restart); this CLI form does not touch a running DS -
-# afterwards press Start/Resume (Start-DS trims the config automatically).
+# thing live (with a DS restart). This CLI form refuses to run while the DS is up:
+# the DS rewrites the config on exit, so the addition would be lost. Afterwards
+# press Start/Resume (Start-DS trims the config automatically).
 #   .\add-server.ps1 -Id <server guid>
 #   .\add-server.ps1 -Search 'COLD FRONT' -Match 'COLD FRONT'
 param(

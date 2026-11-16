@@ -53,8 +53,9 @@ while ($true) {
   if (-not $ds.Count) {
     if ($queued.Count -eq 0) {
       # log the transition only: this branch runs every 15 s forever once the
-      # batch is done, and used to grow watchdog.log without bound
-      if (-not $saidEmpty) { Write-Wd 'queue empty - downloader done'; $saidEmpty = $true }
+      # batch is done, and used to grow watchdog.log without bound. A finished
+      # batch also forgets the strikes, so a mod re-queued later starts clean.
+      if (-not $saidEmpty) { Write-Wd 'queue empty - downloader done'; $saidEmpty = $true; $fail = @{} }
       continue
     }
     $saidEmpty = $false

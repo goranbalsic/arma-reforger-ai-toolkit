@@ -410,8 +410,9 @@ function Get-HaveIds {
   $croot = [IO.DirectoryInfo]::new("$env:USERPROFILE\Documents\My Games\ArmaReforger\addons")
   if ($croot.Exists) {
     foreach ($d in $croot.EnumerateDirectories()) {
-      if ($d.Name -notmatch '_([0-9A-F]{16})$') { continue }
-      if (Test-AddonComplete $d.FullName $d.LastWriteTime) { $have[$Matches[1]] = $true }
+      $m = [regex]::Match($d.Name, '_([0-9A-F]{16})$')   # not $Matches: it does not survive a function call
+      if (-not $m.Success) { continue }
+      if (Test-AddonComplete $d.FullName $d.LastWriteTime) { $have[$m.Groups[1].Value] = $true }
     }
   }
   $have
