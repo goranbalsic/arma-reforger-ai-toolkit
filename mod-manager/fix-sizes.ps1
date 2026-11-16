@@ -4,6 +4,9 @@ $Data = if ($env:RFMM_DATA) { $env:RFMM_DATA } else { Join-Path $PSScriptRoot 'd
 $h = @{ 'User-Agent' = 'arma-reforger-ai-toolkit/1.0' }
 $p = "$Data\batch1-sizes.json"
 $j = Get-Content $p -Raw | ConvertFrom-Json
+# a 0-byte file parses to $null; piping that produced one bogus "need" entry and
+# then wrote "mods": null, which every other script reads as "no sizes at all"
+if (-not $j -or -not $j.mods) { throw "$p has no mods map - restore it instead of overwriting it" }
 $mods = $j.mods
 $need = @($mods.PSObject.Properties | Where-Object { -not $_.Value.exact -or -not $_.Value.bytes })
 "to fetch: $($need.Count)"
@@ -19,5 +22,8 @@ foreach ($e in $need) {
   Start-Sleep -Milliseconds 1200   # stay under 60/min
 }
 $total = ($mods.PSObject.Properties | ForEach-Object { [double]$_.Value.bytes } | Measure-Object -Sum).Sum
-@{ totalBytes = [double]$total; mods = $mods } | ConvertTo-Json -Depth 4 | Set-Content $p -Encoding UTF8
+# atomic: the dashboard reads this file while it runs
+$tmp = "$p.tmp"
+@{ totalBytes = [double]$total; mods = $mods } | ConvertTo-Json -Depth 4 | Set-Content $tmp -Encoding UTF8
+if (Test-Path $p) { [IO.File]::Replace($tmp, $p, [NullString]::Value) } else { Move-Item $tmp $p -Force }
 "updated $done sizes; new total {0:N2} GB" -f ($total/1GB)

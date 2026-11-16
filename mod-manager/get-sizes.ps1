@@ -9,9 +9,19 @@ $mods = @($j.game.mods | ForEach-Object { @{ id = $_.modId; name = $_.name } })
 "mods in config: $($mods.Count)"
 
 $outPath = "$Data\batch1-sizes.json"
+function Save-Json($obj, [string]$Path) {
+  # atomic: a kill during Set-Content leaves json the dashboard cannot parse
+  $tmp = "$Path.tmp"
+  $obj | ConvertTo-Json -Depth 4 | Set-Content $tmp -Encoding UTF8
+  if (Test-Path $Path) { [IO.File]::Replace($tmp, $Path, [NullString]::Value) } else { Move-Item $tmp $Path -Force }
+}
 $all = @{}
 if (Test-Path $outPath) {
-  foreach ($p in (Get-Content $outPath -Raw | ConvertFrom-Json).mods.PSObject.Properties) { $all[$p.Name] = $p.Value }
+  $raw = Get-Content $outPath -Raw -ErrorAction Stop
+  # merge, never replace: with an empty/unreadable file this used to write back
+  # only the chunk it just fetched, destroying every size already resolved
+  if (-not $raw) { throw "$outPath is empty - restore it instead of overwriting every size" }
+  foreach ($p in ($raw | ConvertFrom-Json).mods.PSObject.Properties) { $all[$p.Name] = $p.Value }
 }
 "existing size entries: $($all.Count)"
 
@@ -26,5 +36,5 @@ for ($i = 0; $i -lt $mods.Count; $i += $per) {
 }
 $total = ($all.Values | ForEach-Object { [double]$_.bytes } | Measure-Object -Sum).Sum
 "total: {0:N2} GB across {1} mods ({2} exact)" -f ($total/1GB), $all.Count, @($all.Values | Where-Object exact).Count
-@{ totalBytes = [double]$total; mods = $all } | ConvertTo-Json -Depth 4 | Set-Content $outPath -Encoding UTF8
+Save-Json @{ totalBytes = [double]$total; mods = $all } $outPath
 "saved (merged into) $outPath"
